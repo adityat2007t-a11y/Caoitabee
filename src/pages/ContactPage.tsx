@@ -243,7 +243,7 @@ export const ContactPage: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Vikas Mehta"
+                    placeholder="Enter full name"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -257,7 +257,7 @@ export const ContactPage: React.FC = () => {
                   <input
                     type="tel"
                     required
-                    placeholder="10-digit mobile"
+                    placeholder="Enter 10-digit mobile number"
                     value={mobileNumber}
                     onChange={(e) => setMobileNumber(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -270,7 +270,7 @@ export const ContactPage: React.FC = () => {
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">Email</label>
                   <input
                     type="email"
-                    placeholder="name@domain.com"
+                    placeholder="Enter email address"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -298,7 +298,7 @@ export const ContactPage: React.FC = () => {
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">Required Amount (₹)</label>
                   <input
                     type="text"
-                    placeholder="e.g. 50,00,000"
+                    placeholder="Enter loan amount in ₹"
                     value={loanAmount}
                     onChange={(e) => setLoanAmount(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -309,7 +309,7 @@ export const ContactPage: React.FC = () => {
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">City / State</label>
                   <input
                     type="text"
-                    placeholder="e.g. Thane, Maharashtra"
+                    placeholder="Enter city / location"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"

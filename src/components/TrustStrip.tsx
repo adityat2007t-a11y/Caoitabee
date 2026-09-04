@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, TrendingUp, Globe2, CheckCircle2, Users2 } from 'lucide-react';
+import { ShieldCheck, Layers, Globe2, CheckCircle2, FileCheck2 } from 'lucide-react';
 import { BRAND_CONFIG } from '../config';
 
 export const TrustStrip: React.FC = () => {
@@ -11,9 +11,9 @@ export const TrustStrip: React.FC = () => {
       color: 'text-[#C68B59]',
     },
     {
-      icon: TrendingUp,
-      value: BRAND_CONFIG.metrics.loanDisbursed,
-      label: 'Loan Disbursed',
+      icon: Layers,
+      value: '17',
+      label: 'Specialized Loan Products',
       color: 'text-[#5D6D5F]',
     },
     {
@@ -29,9 +29,9 @@ export const TrustStrip: React.FC = () => {
       color: 'text-[#2D332E]',
     },
     {
-      icon: Users2,
-      value: BRAND_CONFIG.metrics.happyCustomers,
-      label: 'Happy Customers',
+      icon: FileCheck2,
+      value: 'Doorstep',
+      label: 'Documentation Support',
       color: 'text-[#C68B59]',
     },
   ];

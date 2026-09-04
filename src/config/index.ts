@@ -27,11 +27,10 @@ export const BRAND_CONFIG = {
     instagram: 'https://www.instagram.com/capitabee.fin?igsi=MTAzMm92aTIwdHRtcw==',
   },
   metrics: {
-    happyCustomers: '5,000+',
-    loanDisbursed: '₹1,000 Cr+',
     get partnerNetwork(): string {
       return `${PARTNER_NETWORK.length}+`;
     },
+    loanProductsCount: '17 Products',
     transparentJourney: '12-Stage',
     homeLoanStartingRate: '7.20%',
   },

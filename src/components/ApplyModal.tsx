@@ -24,7 +24,11 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
   const [state, setState] = useState('');
   const [associateName, setAssociateName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [result, setResult] = useState<{ success?: boolean; applicationId?: string; error?: string } | null>(null);
+  const [result, setResult] = useState<{
+    success?: boolean;
+    applicationId?: string;
+    error?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (initialLoanType) {
@@ -64,8 +68,11 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
 
     setIsSubmitting(false);
 
-    if (res.error) {
-      setResult({ error: res.error });
+    if (res.error || !res.success) {
+      setResult({
+        success: false,
+        error: res.error || 'Submission failed.',
+      });
     } else {
       setResult({
         success: true,
@@ -116,14 +123,17 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
                 <div className="font-mono font-bold text-xs">
                   Application ID: <span className="text-[#C68B59] text-sm">{result.applicationId}</span>
                 </div>
-                <p className="text-[11px] leading-relaxed">
+                <p className="text-[11px] leading-relaxed text-[#68716A]">
                   Our loan underwriting desk at <strong>CAPITABEE FINANCIAL SERVICES</strong> will review your details and contact you shortly.
                 </p>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
-                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                <span>{result.error}</span>
+              <div className="flex items-start gap-1.5">
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">Application Registration Failed</div>
+                  <div className="mt-0.5 text-xs text-red-700">{result.error}</div>
+                </div>
               </div>
             )}
           </div>
@@ -137,7 +147,7 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
             <input
               type="text"
               required
-              placeholder="e.g. Ramesh Sharma"
+              placeholder="Enter full name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -152,7 +162,7 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
               <input
                 type="tel"
                 required
-                placeholder="10-digit mobile"
+                placeholder="Enter 10-digit mobile number"
                 value={mobileNumber}
                 onChange={(e) => setMobileNumber(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -163,7 +173,7 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
               <label className="block text-xs font-bold text-[#2D332E] mb-1">Email</label>
               <input
                 type="email"
-                placeholder="name@email.com"
+                placeholder="Enter email address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -196,7 +206,7 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
               <input
                 type="text"
                 required
-                placeholder="e.g. 50,00,000"
+                placeholder="Enter loan amount in ₹"
                 value={requiredLoanAmount}
                 onChange={(e) => setRequiredLoanAmount(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none font-medium"
@@ -223,7 +233,7 @@ export const ApplyModal: React.FC<ApplyModalProps> = ({
               <label className="block text-xs font-bold text-[#2D332E] mb-1">City</label>
               <input
                 type="text"
-                placeholder="e.g. Thane, Mumbai"
+                placeholder="Enter city"
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"

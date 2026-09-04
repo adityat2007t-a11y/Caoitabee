@@ -159,12 +159,12 @@ export const AboutPage: React.FC<AboutPageProps> = ({ onOpenApplyModal, onNaviga
                 <div className="text-[10px] text-[#68716A] font-medium">Loan Products</div>
               </div>
               <div className="bg-[#FDFCF8] p-3 rounded-xl border border-[#E5DFD3]">
-                <div className="text-xl font-extrabold text-[#2D332E]">₹1,000 Cr+</div>
-                <div className="text-[10px] text-[#68716A] font-medium">Loans Disbursed</div>
+                <div className="text-xl font-extrabold text-[#2D332E]">12-Stage</div>
+                <div className="text-[10px] text-[#68716A] font-medium">Transparent Journey</div>
               </div>
               <div className="bg-[#FDFCF8] p-3 rounded-xl border border-[#E5DFD3]">
-                <div className="text-xl font-extrabold text-[#C68B59]">5,000+</div>
-                <div className="text-[10px] text-[#68716A] font-medium">Happy Customers</div>
+                <div className="text-xl font-extrabold text-[#C68B59]">Pan-India</div>
+                <div className="text-[10px] text-[#68716A] font-medium">Nationwide Coverage</div>
               </div>
             </div>
           </div>

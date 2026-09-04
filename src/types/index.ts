@@ -172,12 +172,14 @@ export interface DocumentRecord {
 
 export interface ReviewRecord {
   id: string;
+  customerId?: string;
+  applicationId?: string;
   customerName: string;
   rating: number;
   reviewText: string;
   loanType: string;
   city?: string;
-  status: 'Pending' | 'Approved' | 'Rejected';
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Archived';
   createdAt: string;
   photoUrl?: string;
 }

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { ReviewRecord } from '../types';
 import { api } from '../services/api';
+import { supabaseService } from '../services/supabaseService';
 import { BRAND_CONFIG, LOAN_PRODUCTS } from '../config';
 
 interface ReviewsPageProps {
@@ -36,16 +37,23 @@ export const ReviewsPage: React.FC<ReviewsPageProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<{ success?: boolean; message?: string; error?: string } | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const fetchReviews = () => {
     api.getApprovedReviews().then((data) => {
-      if (isMounted) {
-        setReviews(data);
-        setIsLoading(false);
-      }
+      setReviews(data);
+      setIsLoading(false);
     });
+  };
+
+  useEffect(() => {
+    fetchReviews();
+
+    const unsubscribe = supabaseService.subscribeToReviews((payload) => {
+      console.log('[ReviewsPage Realtime Sync] Reviews table event:', payload);
+      fetchReviews();
+    });
+
     return () => {
-      isMounted = false;
+      unsubscribe();
     };
   }, []);
 
@@ -93,7 +101,7 @@ export const ReviewsPage: React.FC<ReviewsPageProps> = ({
             <span>Customer Experiences</span>
           </div>
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-[#2D332E]">
-            {BRAND_CONFIG.metrics.happyCustomers} Happy Customers
+            Customer Reviews & Experiences
           </h1>
           <p className="text-base text-[#68716A] leading-relaxed">
             Customers across India trust Capitabee Financial Services for their loan assistance and financing requirements.
@@ -184,7 +192,7 @@ export const ReviewsPage: React.FC<ReviewsPageProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Anand Kulkarni"
+                  placeholder="Enter full name"
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -213,7 +221,7 @@ export const ReviewsPage: React.FC<ReviewsPageProps> = ({
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">City / Location</label>
                   <input
                     type="text"
-                    placeholder="e.g. Thane, Pune"
+                    placeholder="Enter city / location"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"

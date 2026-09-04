@@ -65,7 +65,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       {/* 2. TRUST NUMBERS STRIP */}
       <TrustStrip />
 
-      {/* 3. 5,000+ HAPPY CUSTOMERS SECTION (Prominently near the top) */}
+      {/* 3. CUSTOMER EXPERIENCES & REVIEWS SECTION */}
       <HappyCustomersSection
         onOpenWriteReview={onOpenWriteReview}
         onOpenShareModal={onOpenShareModal}

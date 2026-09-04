@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Star, X, CheckCircle2, AlertCircle, MessageSquarePlus, ArrowRight } from 'lucide-react';
 import { LOAN_PRODUCTS } from '../config';
 import { api } from '../services/api';
+import { authService } from '../services/auth';
 
 interface ReviewModalProps {
   isOpen: boolean;
@@ -17,6 +18,14 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose }) => 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<{ success?: boolean; message?: string; error?: string } | null>(null);
 
+  useEffect(() => {
+    const user = authService.getCurrentUser();
+    if (user) {
+      if (user.fullName) setCustomerName(user.fullName);
+      if (user.loanType) setLoanType(user.loanType);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -29,13 +38,17 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose }) => 
     setIsSubmitting(true);
     setResult(null);
 
+    const user = authService.getCurrentUser();
+
     const res = await api.submitReview({
-      customerName,
+      customerName: customerName.trim(),
       rating,
       loanType,
       city: city.trim() || undefined,
-      reviewText,
-    });
+      reviewText: reviewText.trim(),
+      customerId: user?.customerId || undefined,
+      applicationId: user?.applicationId || undefined,
+    } as any);
 
     setIsSubmitting(false);
 
@@ -47,7 +60,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose }) => 
         message:
           'Thank you for submitting your feedback! Your review is in PENDING status and will appear publicly once verified by our quality desk.',
       });
-      setCustomerName('');
+      if (!user) setCustomerName('');
       setCity('');
       setReviewText('');
     }
@@ -126,7 +139,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose }) => 
             <input
               type="text"
               required
-              placeholder="e.g. Anand Kulkarni"
+              placeholder="Enter full name"
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
@@ -156,7 +169,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose }) => 
               <label className="block text-xs font-bold text-[#2D332E] mb-1">City / Location</label>
               <input
                 type="text"
-                placeholder="e.g. Anand, Pune, Delhi"
+                placeholder="Enter city / location"
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"

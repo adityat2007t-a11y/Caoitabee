@@ -1,5 +1,7 @@
-import { AuthCredentials, AuthResponse, CustomerUser, CustomerDashboardData, DocumentRecord, ChatMessage } from '../types';
-import { ApiResponse } from './api';
+import { AuthCredentials, AuthResponse, CustomerUser, CustomerDashboardData, DocumentRecord, ChatMessage, LoanApplication } from '../types';
+import { ApiResponse, api } from './api';
+import { supabaseService } from './supabaseService';
+import { supabase } from '../config/supabase';
 
 // Configurable base URL for external Customer Portal / Auth API
 const envBaseUrl = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_AUTH_API_BASE_URL : undefined;
@@ -8,6 +10,7 @@ const AUTH_API_BASE_URL = (envBaseUrl || '/api/customer').replace(/\/+$/, '');
 const STORAGE_KEYS = {
   TOKEN: 'capitabee_auth_token',
   USER: 'capitabee_auth_user',
+  SELECTED_APP: 'capitabee_selected_app_id',
 };
 
 class AuthService {
@@ -51,11 +54,11 @@ class AuthService {
    * Checks if user has an active session token.
    */
   isAuthenticated(): boolean {
-    return Boolean(this.token);
+    return Boolean(this.token || this.currentUser);
   }
 
   /**
-   * Authenticates against the REAL backend / Customer Portal API.
+   * Authenticates against the REAL Supabase Database & CRM Backend.
    * Never accepts fake credentials or creates mock sessions.
    */
   async login(credentials: AuthCredentials): Promise<AuthResponse> {
@@ -65,10 +68,40 @@ class AuthService {
     if (!cleanId || !cleanPassword) {
       return {
         success: false,
-        error: 'Please enter both your Customer ID and Password.',
+        error: 'Please enter both your Customer ID / Email and Password.',
       };
     }
 
+    // 1. Try Direct Supabase Auth
+    if (supabaseService.isConfigured()) {
+      const supaRes = await supabaseService.login(cleanId, cleanPassword);
+      if (supaRes.success && supaRes.customer) {
+        this.token = supaRes.token || 'supabase-authenticated';
+        this.currentUser = supaRes.customer;
+
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(STORAGE_KEYS.TOKEN, this.token);
+          sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(supaRes.customer));
+          if (supaRes.customer.applicationId) {
+            sessionStorage.setItem(STORAGE_KEYS.SELECTED_APP, supaRes.customer.applicationId);
+          }
+        }
+
+        return {
+          success: true,
+          token: this.token,
+          customer: supaRes.customer,
+        };
+      } else if (supaRes.error && !supaRes.error.includes('not initialized')) {
+        // If Supabase gave a specific authentication failure, return it
+        return {
+          success: false,
+          error: supaRes.error,
+        };
+      }
+    }
+
+    // 2. Fallback to API endpoint
     try {
       const res = await fetch(`${AUTH_API_BASE_URL}/login`, {
         method: 'POST',
@@ -85,7 +118,6 @@ class AuthService {
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data || !data.success) {
-        // Honest error reporting
         if (res.status === 404 || res.status === 502 || res.status === 503) {
           return {
             success: false,
@@ -105,6 +137,9 @@ class AuthService {
       if (typeof window !== 'undefined') {
         sessionStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
         sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(data.customer));
+        if (data.customer?.applicationId) {
+          sessionStorage.setItem(STORAGE_KEYS.SELECTED_APP, data.customer.applicationId);
+        }
       }
 
       return {
@@ -121,9 +156,28 @@ class AuthService {
   }
 
   /**
-   * Refreshes the session using the Bearer token.
+   * Refreshes the session using the Bearer token or Supabase Auth.
    */
   async refreshSession(): Promise<AuthResponse | null> {
+    if (supabase) {
+      const session = await supabaseService.getSession();
+      if (session?.user) {
+        const userRes = await supabaseService.buildCustomerUserFromSession(session.user, session.access_token);
+        if (userRes.customer) {
+          this.currentUser = userRes.customer;
+          this.token = session.access_token;
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userRes.customer));
+          }
+          return {
+            success: true,
+            token: this.token,
+            customer: userRes.customer,
+          };
+        }
+      }
+    }
+
     if (!this.token) return null;
 
     try {
@@ -153,28 +207,134 @@ class AuthService {
         customer: data.customer,
       };
     } catch {
-      // In case of connection failure, retain token but do not fabricate data
       return null;
     }
   }
 
   /**
-   * Fetches the authenticated customer's real dashboard record.
-   * Relies strictly on the Bearer token; never accepts browser-injected Customer IDs.
+   * Fetches customer's applications list (for multi-application switching)
    */
-  async getDashboardData(): Promise<{
+  async getCustomerApplications(): Promise<LoanApplication[]> {
+    if (supabase) {
+      const session = await supabaseService.getSession();
+      const userId = session?.user?.id;
+      if (userId) {
+        return await supabaseService.getCustomerApplications(userId, this.currentUser?.customerId);
+      }
+    }
+    return [];
+  }
+
+  /**
+   * Fetches the authenticated customer's real dashboard record directly from Supabase.
+   */
+  async getDashboardData(selectedAppId?: string): Promise<{
     success: boolean;
     data?: CustomerDashboardData;
     error?: string;
     isNotConnected?: boolean;
+    applications?: LoanApplication[];
   }> {
-    if (!this.token) {
+    if (!this.isAuthenticated()) {
       return {
         success: false,
         error: 'Not authenticated. Please log in.',
       };
     }
 
+    // 1. Direct Supabase Query Flow
+    if (supabase) {
+      try {
+        const session = await supabaseService.getSession();
+        const userId = session?.user?.id;
+        const customer = this.currentUser;
+
+        if (userId || customer) {
+          // Fetch all customer applications
+          const applications = userId
+            ? await supabaseService.getCustomerApplications(userId, customer?.customerId)
+            : [];
+
+          // Determine active application
+          const activeAppId =
+            selectedAppId ||
+            (typeof window !== 'undefined' ? sessionStorage.getItem(STORAGE_KEYS.SELECTED_APP) : null) ||
+            customer?.applicationId ||
+            (applications.length > 0 ? applications[0].id : null);
+
+          let activeApp: LoanApplication | null = null;
+          if (activeAppId) {
+            activeApp = applications.find((a) => a.id === activeAppId) || null;
+            if (!activeApp) {
+              const appRes = await api.getApplication(activeAppId);
+              if (appRes.data) activeApp = appRes.data;
+            }
+          }
+
+          if (activeAppId && typeof window !== 'undefined') {
+            sessionStorage.setItem(STORAGE_KEYS.SELECTED_APP, activeAppId);
+          }
+
+          const appIdToQuery = activeAppId || 'CAP-PENDING';
+
+          // Concurrently fetch stages, documents, messages, timeline, notifications
+          const [stages, documents, messages, timeline, notifications] = await Promise.all([
+            supabaseService.getApplicationStages(appIdToQuery),
+            supabaseService.getDocuments(appIdToQuery),
+            supabaseService.getMessages(appIdToQuery),
+            supabaseService.getApplicationTimeline(appIdToQuery),
+            supabaseService.getNotifications(appIdToQuery, userId),
+          ]);
+
+          const finalApp: LoanApplication = activeApp || {
+            id: appIdToQuery,
+            customerId: customer?.customerId,
+            fullName: customer?.fullName || 'Valued Customer',
+            mobileNumber: customer?.mobileNumber || '',
+            loanType: customer?.loanType || 'Loan Assistance',
+            requiredLoanAmount: customer?.requestedAmount || 0,
+            status: customer?.applicationStatus || 'Received',
+            currentStage: customer?.currentStage || 1,
+            createdAt: customer?.createdAt || new Date().toISOString(),
+            stages: stages,
+          };
+
+          finalApp.stages = stages;
+
+          const activeCustomerUser: CustomerUser = customer || {
+            customerId: `CUST-${userId ? userId.slice(0, 8).toUpperCase() : 'USER'}`,
+            fullName: finalApp.fullName,
+            mobileNumber: finalApp.mobileNumber,
+            email: finalApp.email,
+            applicationId: finalApp.id,
+            loanType: finalApp.loanType,
+            requestedAmount: finalApp.requiredLoanAmount,
+            associateName: finalApp.associateName,
+            assignedLoanOfficer: finalApp.assignedOfficer || 'Capitabee Loan Processing Desk',
+            currentStage: finalApp.currentStage,
+            applicationStatus: finalApp.status,
+            createdAt: finalApp.createdAt,
+          };
+
+          return {
+            success: true,
+            applications,
+            data: {
+              customer: activeCustomerUser,
+              application: finalApp,
+              documents,
+              messages,
+              notifications,
+              timeline,
+            },
+          };
+        }
+      } catch (err: any) {
+        console.warn('Direct Supabase dashboard fetch encountered error, falling back to API proxy:', err);
+      }
+    }
+
+    // 2. API Proxy Fallback
     try {
       const res = await fetch(`${AUTH_API_BASE_URL}/dashboard`, {
         method: 'GET',
@@ -230,7 +390,6 @@ class AuthService {
 
   /**
    * Request password recovery.
-   * Does NOT simulate OTP or generate fake reset tokens.
    */
   async requestPasswordReset(customerId: string): Promise<{ success: boolean; message?: string; error?: string }> {
     const cleanId = customerId.trim();
@@ -253,7 +412,7 @@ class AuthService {
       if (!res.ok || !data?.success) {
         return {
           success: false,
-          error: data?.error || 'Password recovery service is not connected yet.',
+          error: data?.error || 'Password recovery service is not connected yet. Please contact your Capitabee loan associate directly at +91 8010886625.',
         };
       }
 
@@ -270,16 +429,30 @@ class AuthService {
   }
 
   /**
-   * Uploads a document to the customer's real record.
+   * Uploads a document to the customer's real record in Supabase.
    */
   async uploadDocument(payload: {
     applicationId: string;
     documentType: string;
     fileName: string;
-    category?: string;
+    category?: 'KYC' | 'Income' | 'Property' | 'Business' | 'Financials' | 'Other';
+    file?: File;
   }): Promise<ApiResponse<DocumentRecord>> {
-    if (!this.token) {
-      return { error: 'Authentication required. Please log in.' };
+    if (supabase && payload.file) {
+      const res = await supabaseService.uploadDocument({
+        applicationId: payload.applicationId,
+        customerId: this.currentUser?.customerId,
+        documentType: payload.documentType,
+        category: payload.category || 'Income',
+        file: payload.file,
+      });
+
+      if (res.success && res.document) {
+        return { success: true, data: res.document };
+      }
+      if (res.error) {
+        return { error: res.error };
+      }
     }
 
     try {
@@ -305,9 +478,27 @@ class AuthService {
   /**
    * Sends a message to the loan desk from authenticated customer.
    */
-  async sendMessage(message: string): Promise<ApiResponse<ChatMessage>> {
-    if (!this.token) {
-      return { error: 'Authentication required. Please log in.' };
+  async sendMessage(message: string, applicationId?: string): Promise<ApiResponse<ChatMessage>> {
+    const targetAppId = applicationId || this.currentUser?.applicationId;
+    if (!targetAppId) {
+      return { error: 'Application ID is required to send message.' };
+    }
+
+    if (supabase) {
+      const session = await supabaseService.getSession();
+      const res = await supabaseService.sendMessage({
+        applicationId: targetAppId,
+        message,
+        senderName: this.currentUser?.fullName || 'Customer',
+        senderUserId: session?.user?.id,
+      });
+
+      if (res.success && res.message) {
+        return { success: true, data: res.message };
+      }
+      if (res.error) {
+        return { error: res.error };
+      }
     }
 
     try {
@@ -334,6 +525,8 @@ class AuthService {
    * Terminates active session.
    */
   async logout(): Promise<void> {
+    await supabaseService.logout();
+
     if (this.token) {
       try {
         await fetch(`${AUTH_API_BASE_URL}/logout`, {
@@ -353,8 +546,10 @@ class AuthService {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem(STORAGE_KEYS.TOKEN);
       sessionStorage.removeItem(STORAGE_KEYS.USER);
+      sessionStorage.removeItem(STORAGE_KEYS.SELECTED_APP);
       localStorage.removeItem(STORAGE_KEYS.TOKEN);
       localStorage.removeItem(STORAGE_KEYS.USER);
+      localStorage.removeItem(STORAGE_KEYS.SELECTED_APP);
     }
   }
 }

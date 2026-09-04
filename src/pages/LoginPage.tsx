@@ -151,16 +151,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-[#2D332E] mb-1.5">
-                Customer ID <span className="text-red-500">*</span>
+                Customer ID or Email <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 autoComplete="username"
-                placeholder="Enter your assigned Customer ID"
+                placeholder="Enter Customer ID or registered email"
                 value={customerId}
                 onChange={(e) => setCustomerId(e.target.value)}
-                className="w-full px-4 py-3 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none font-mono"
+                className="w-full px-4 py-3 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
               />
             </div>
 

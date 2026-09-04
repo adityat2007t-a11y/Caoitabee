@@ -1,4 +1,6 @@
 import { LoanApplication, ReviewRecord, CustomerUser, DocumentRecord, ChatMessage, CallbackRequest, ContactMessage } from '../types';
+import { supabase } from '../config/supabase';
+import { supabaseService } from './supabaseService';
 
 export interface ApiResponse<T> {
   success?: boolean;
@@ -13,7 +15,7 @@ export interface ApiResponse<T> {
 }
 
 export const api = {
-  // Application submission
+  // Direct Supabase Application submission without requiring SELECT permissions
   async submitApplication(payload: {
     fullName: string;
     mobileNumber: string;
@@ -26,25 +28,135 @@ export const api = {
     preferredContactMethod?: string;
     associateName?: string;
   }): Promise<ApiResponse<LoanApplication>> {
+    if (!supabase) {
+      return {
+        success: false,
+        error: 'Supabase client is not initialized.',
+      };
+    }
+
+    const cleanPhone = payload.mobileNumber.trim();
+    const cleanName = payload.fullName.trim();
+    const cleanEmail = payload.email?.trim() || null;
+    const cleanLoanType = payload.loanType.trim();
+    const cleanAmount = Number(payload.requiredLoanAmount);
+    const cleanEmp = payload.employmentType?.trim() || 'Salaried';
+    const cleanCity = payload.city?.trim() || 'Thane';
+    const cleanState = payload.state?.trim() || 'Maharashtra';
+    const cleanContactMethod = payload.preferredContactMethod || 'Phone Call';
+    const cleanAssocName = payload.associateName?.trim() || null;
+
+    if (!cleanName || !cleanPhone) {
+      return {
+        success: false,
+        error: 'Full name and mobile number are required.',
+      };
+    }
+
     try {
-      const res = await fetch('/api/applications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      // Authoritative intake path: call SECURITY DEFINER RPC
+      const { data: rpcData, error: rpcError } = await supabase.rpc('submit_public_loan_application', {
+        p_full_name: cleanName,
+        p_mobile_number: cleanPhone,
+        p_email: cleanEmail,
+        p_loan_type: cleanLoanType,
+        p_required_loan_amount: cleanAmount,
+        p_employment_type: cleanEmp,
+        p_city: cleanCity,
+        p_state: cleanState,
+        p_preferred_contact_method: cleanContactMethod,
+        p_associate_name: cleanAssocName,
+        p_associate_id: null,
+        p_notes: 'Submitted via Capitabee public website intake modal',
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Application service is not connected yet.' };
+
+      if (rpcError) {
+        console.error('Supabase submit_public_loan_application RPC error:', rpcError);
+        return {
+          success: false,
+          error: `Intake error [${rpcError.code}]: ${rpcError.message}`,
+        };
       }
-      return data;
-    } catch (err) {
-      return { error: 'Application service is not connected yet.' };
+
+      if (!rpcData || !rpcData.success) {
+        return {
+          success: false,
+          error: rpcData?.error || 'Unable to register loan application at this time.',
+        };
+      }
+
+      const appId = rpcData.application_id;
+      const custId = rpcData.customer_id;
+
+      return {
+        success: true,
+        applicationId: appId,
+        message: 'Your loan application has been received successfully.',
+        data: {
+          id: appId,
+          customerId: custId,
+          fullName: cleanName,
+          mobileNumber: cleanPhone,
+          email: cleanEmail || undefined,
+          loanType: cleanLoanType,
+          requiredLoanAmount: cleanAmount,
+          employmentType: cleanEmp as any,
+          city: cleanCity,
+          state: cleanState,
+          preferredContactMethod: cleanContactMethod as any,
+          associateName: cleanAssocName || undefined,
+          status: (rpcData.status as any) || 'Received',
+          currentStage: rpcData.current_stage || 1,
+          createdAt: new Date().toISOString(),
+          stages: [],
+        },
+      };
+    } catch (err: any) {
+      console.error('Exception during public loan application submission:', err);
+      return {
+        success: false,
+        error: err.message || 'Network exception while connecting to Capitabee database.',
+      };
     }
   },
 
   // Fetch application details
   async getApplication(id: string): Promise<ApiResponse<LoanApplication>> {
     try {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('applications')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          const stages = await supabaseService.getApplicationStages(id);
+          return {
+            success: true,
+            data: {
+              id: data.id,
+              customerId: data.customer_id,
+              fullName: data.full_name,
+              mobileNumber: data.mobile_number,
+              email: data.email,
+              loanType: data.loan_type,
+              requiredLoanAmount: Number(data.required_loan_amount),
+              employmentType: data.employment_type,
+              city: data.city,
+              state: data.state,
+              preferredContactMethod: data.preferred_contact_method,
+              associateName: data.associate_name,
+              assignedOfficer: data.assigned_officer,
+              status: data.status,
+              currentStage: data.current_stage,
+              createdAt: data.created_at,
+              stages,
+            },
+          };
+        }
+      }
+
       const res = await fetch(`/api/applications/${encodeURIComponent(id)}`);
       const data = await res.json();
       if (!res.ok) {
@@ -65,6 +177,16 @@ export const api = {
     city?: string;
     photoUrl?: string;
   }): Promise<ApiResponse<ReviewRecord>> {
+    if (supabase) {
+      const res = await supabaseService.submitReview(payload);
+      if (res.success) {
+        return {
+          success: true,
+          message: res.message || 'Review submitted successfully.',
+        };
+      }
+    }
+
     try {
       const res = await fetch('/api/reviews', {
         method: 'POST',
@@ -83,6 +205,13 @@ export const api = {
 
   // Fetch Approved Reviews
   async getApprovedReviews(): Promise<ReviewRecord[]> {
+    if (supabase) {
+      const list = await supabaseService.getApprovedReviews();
+      if (list && list.length > 0) {
+        return list;
+      }
+    }
+
     try {
       const res = await fetch('/api/reviews/approved');
       if (!res.ok) return [];
@@ -101,6 +230,16 @@ export const api = {
     subject?: string;
     message: string;
   }): Promise<ApiResponse<ContactMessage>> {
+    if (supabase) {
+      const res = await supabaseService.submitContact(payload);
+      if (res.success) {
+        return {
+          success: true,
+          message: res.message,
+        };
+      }
+    }
+
     try {
       const res = await fetch('/api/contact', {
         method: 'POST',
@@ -127,6 +266,16 @@ export const api = {
     associateName?: string;
     message?: string;
   }): Promise<ApiResponse<CallbackRequest>> {
+    if (supabase) {
+      const res = await supabaseService.submitCallback(payload);
+      if (res.success) {
+        return {
+          success: true,
+          message: res.message,
+        };
+      }
+    }
+
     try {
       const res = await fetch('/api/callback', {
         method: 'POST',
@@ -197,6 +346,11 @@ export const api = {
 
   // Chat Messages
   async getMessages(applicationId: string): Promise<ChatMessage[]> {
+    if (supabase) {
+      const msgs = await supabaseService.getMessages(applicationId);
+      if (msgs && msgs.length > 0) return msgs;
+    }
+
     try {
       const res = await fetch(`/api/applications/${encodeURIComponent(applicationId)}/messages`);
       if (!res.ok) return [];
@@ -208,6 +362,17 @@ export const api = {
   },
 
   async sendMessage(applicationId: string, message: string, senderName: string): Promise<ApiResponse<ChatMessage>> {
+    if (supabase) {
+      const res = await supabaseService.sendMessage({
+        applicationId,
+        message,
+        senderName,
+      });
+      if (res.success && res.message) {
+        return { success: true, data: res.message };
+      }
+    }
+
     try {
       const res = await fetch(`/api/applications/${encodeURIComponent(applicationId)}/messages`, {
         method: 'POST',
@@ -240,3 +405,4 @@ export const api = {
     }
   },
 };
+

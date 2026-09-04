@@ -155,8 +155,11 @@ export const Hero: React.FC<HeroProps> = ({
 
     setIsSubmitting(false);
 
-    if (res.error) {
-      setSubmissionResult({ error: res.error });
+    if (res.error || !res.success) {
+      setSubmissionResult({
+        success: false,
+        error: res.error || 'Submission failed.',
+      });
     } else {
       setSubmissionResult({
         success: true,
@@ -268,16 +271,16 @@ export const Hero: React.FC<HeroProps> = ({
 
             <div className="px-3 py-1 flex flex-col">
               <span className="text-xl sm:text-2xl font-extrabold text-[#2D332E]">
-                {BRAND_CONFIG.metrics.loanDisbursed}
+                17
               </span>
-              <span className="text-xs text-[#68716A] font-medium mt-0.5">Loan Disbursed</span>
+              <span className="text-xs text-[#68716A] font-medium mt-0.5">Specialized Loan Products</span>
             </div>
 
             <div className="px-3 py-1 flex flex-col">
               <span className="text-xl sm:text-2xl font-extrabold text-[#C68B59]">
-                {BRAND_CONFIG.metrics.happyCustomers}
+                {BRAND_CONFIG.metrics.transparentJourney}
               </span>
-              <span className="text-xs text-[#68716A] font-medium mt-0.5">Happy Customers</span>
+              <span className="text-xs text-[#68716A] font-medium mt-0.5">Transparent Loan Journey</span>
             </div>
           </div>
 
@@ -380,17 +383,14 @@ export const Hero: React.FC<HeroProps> = ({
                     <p className="text-xs text-[#68716A]">
                       Our loan officer at <strong>CAPITABEE FINANCIAL SERVICES</strong> will review your details and connect with you shortly.
                     </p>
-                    {submissionResult.notifications && (
-                      <div className="pt-2 text-[11px] border-t border-[#5D6D5F]/20 text-[#68716A] space-y-1">
-                        <div>• WhatsApp: {submissionResult.notifications.whatsapp}</div>
-                        <div>• SMS: {submissionResult.notifications.sms}</div>
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <div className="flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
-                    <span>{submissionResult.error}</span>
+                    <div>
+                      <div className="font-bold">Application Registration Failed</div>
+                      <div className="mt-0.5 text-xs text-red-700">{submissionResult.error}</div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -406,7 +406,7 @@ export const Hero: React.FC<HeroProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Ramesh Sharma"
+                  placeholder="Enter full name"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all"
@@ -423,7 +423,7 @@ export const Hero: React.FC<HeroProps> = ({
                   <input
                     type="tel"
                     required
-                    placeholder="10-digit mobile"
+                    placeholder="Enter 10-digit mobile number"
                     value={mobileNumber}
                     onChange={(e) => setMobileNumber(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all"
@@ -435,7 +435,7 @@ export const Hero: React.FC<HeroProps> = ({
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">Email Address</label>
                   <input
                     type="email"
-                    placeholder="name@email.com"
+                    placeholder="Enter email address"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all"
@@ -472,7 +472,7 @@ export const Hero: React.FC<HeroProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 50,00,000"
+                    placeholder="Enter loan amount in ₹"
                     value={requiredLoanAmount}
                     onChange={(e) => setRequiredLoanAmount(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all font-medium"
@@ -503,7 +503,7 @@ export const Hero: React.FC<HeroProps> = ({
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">City</label>
                   <input
                     type="text"
-                    placeholder="e.g. Mumbai, Delhi, Bengaluru"
+                    placeholder="Enter city"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all"
@@ -515,7 +515,7 @@ export const Hero: React.FC<HeroProps> = ({
                   <label className="block text-xs font-bold text-[#2D332E] mb-1">State</label>
                   <input
                     type="text"
-                    placeholder="e.g. Maharashtra"
+                    placeholder="Enter state"
                     value={state}
                     onChange={(e) => setState(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] placeholder-[#8C968E] focus:outline-none focus:ring-2 focus:ring-[#C68B59] focus:border-transparent transition-all"

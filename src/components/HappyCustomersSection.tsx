@@ -3,6 +3,7 @@ import { Star, MessageSquarePlus, Share2, Quote, ArrowRight, CheckCircle2 } from
 import { BRAND_CONFIG } from '../config';
 import { ReviewRecord } from '../types';
 import { api } from '../services/api';
+import { supabaseService } from '../services/supabaseService';
 
 interface HappyCustomersProps {
   onOpenWriteReview?: () => void;
@@ -18,16 +19,24 @@ export const HappyCustomersSection: React.FC<HappyCustomersProps> = ({
   const [approvedReviews, setApprovedReviews] = useState<ReviewRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    let isMounted = true;
+  const fetchReviews = () => {
     api.getApprovedReviews().then((reviews) => {
-      if (isMounted) {
-        setApprovedReviews(reviews);
-        setIsLoading(false);
-      }
+      setApprovedReviews(reviews);
+      setIsLoading(false);
     });
+  };
+
+  useEffect(() => {
+    fetchReviews();
+
+    // Setup Realtime Sync for Approved Reviews from Supabase
+    const unsubscribe = supabaseService.subscribeToReviews((payload) => {
+      console.log('[Reviews Realtime Sync] Updated reviews payload:', payload);
+      fetchReviews();
+    });
+
     return () => {
-      isMounted = false;
+      unsubscribe();
     };
   }, []);
 
@@ -42,7 +51,7 @@ export const HappyCustomersSection: React.FC<HappyCustomersProps> = ({
               <span>Pan-India Client Trust</span>
             </div>
             <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-[#2D332E]">
-              {BRAND_CONFIG.metrics.happyCustomers} Happy Customers
+              Customer Reviews & Experiences
             </h2>
             <p className="text-sm sm:text-base text-[#68716A] mt-1 max-w-2xl">
               Customers across India trust Capitabee Financial Services for their loan assistance and financing requirements.
