@@ -303,7 +303,8 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
   }
 
   const { customer, application, documents, messages, notifications, timeline } = dashboardData;
-  const currentStageNum = application.currentStage || customer.currentStage || 1;
+  const hasApplication = Boolean(application && application.id);
+  const currentStageNum = hasApplication ? (application.currentStage || customer.currentStage || 1) : 0;
 
   // Build 12 stages merged with DB stages
   const dbStages = application.stages || [];
@@ -314,8 +315,10 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
     }
     // Default status according to currentStageNum
     let defaultStatus: any = 'Pending';
-    if (baseStage.stageNumber < currentStageNum) defaultStatus = 'Completed';
-    else if (baseStage.stageNumber === currentStageNum) defaultStatus = 'In Progress';
+    if (hasApplication) {
+      if (baseStage.stageNumber < currentStageNum) defaultStatus = 'Completed';
+      else if (baseStage.stageNumber === currentStageNum) defaultStatus = 'In Progress';
+    }
 
     return {
       stageNumber: baseStage.stageNumber,
@@ -350,11 +353,15 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
               Welcome, {customer.fullName}
             </h1>
             <div className="flex flex-wrap items-center gap-3 text-xs text-[#68716A]">
-              <span>Active File: <strong className="font-mono text-[#2D332E]">{application.id}</strong></span>
-              <span>•</span>
-              <span>Loan: <strong className="text-[#2D332E]">{application.loanType}</strong></span>
-              <span>•</span>
-              <span>Sanction Target: <strong className="text-[#C68B59]">{formatINR(application.requiredLoanAmount)}</strong></span>
+              <span>Active File: <strong className="font-mono text-[#2D332E]">{hasApplication ? application.id : 'No File Linked'}</strong></span>
+              {hasApplication && (
+                <>
+                  <span>•</span>
+                  <span>Loan: <strong className="text-[#2D332E]">{application.loanType}</strong></span>
+                  <span>•</span>
+                  <span>Sanction Target: <strong className="text-[#C68B59]">{formatINR(application.requiredLoanAmount)}</strong></span>
+                </>
+              )}
             </div>
           </div>
 
@@ -537,105 +544,126 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
         {/* TAB 1: 12-Stage Real Progress Tracker */}
         {activeTab === 'stages' && (
           <div className="bg-[#FDFCF8] rounded-3xl p-6 sm:p-8 border border-[#E5DFD3] shadow-xs space-y-6">
-            <div className="flex flex-wrap items-center justify-between border-b border-[#E5DFD3] pb-4 gap-3">
-              <div>
-                <h3 className="text-lg font-extrabold text-[#2D332E]">
-                  12-Stage Underwriting Journey (View-Only)
-                </h3>
-                <p className="text-xs text-[#68716A] mt-0.5">
-                  Current Stage:{' '}
-                  <strong className="text-[#C68B59]">
-                    Stage {currentStageNum}: {mergedStages[currentStageNum - 1]?.name || 'In Progress'}
-                  </strong>
-                </p>
+            {!hasApplication ? (
+              <div className="text-center py-12 space-y-4">
+                <FileText className="w-12 h-12 text-[#C68B59] mx-auto opacity-70" />
+                <div className="space-y-1">
+                  <h3 className="text-base font-extrabold text-[#2D332E]">No Active Loan Application</h3>
+                  <p className="text-xs text-[#68716A] max-w-md mx-auto leading-relaxed">
+                    There is currently no loan application file linked to your customer profile. If you have just submitted an application, it will appear once recorded by the loan desk.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenApplyModal}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#C68B59] hover:bg-[#AA7142] transition-colors cursor-pointer shadow-xs"
+                >
+                  Submit New Application
+                </button>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-[#5D6D5F] bg-[#EBF0EC] px-3 py-1 rounded-xl border border-[#5D6D5F]/30">
-                  Status: {application.status}
-                </span>
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between border-b border-[#E5DFD3] pb-4 gap-3">
+                  <div>
+                    <h3 className="text-lg font-extrabold text-[#2D332E]">
+                      12-Stage Underwriting Journey (View-Only)
+                    </h3>
+                    <p className="text-xs text-[#68716A] mt-0.5">
+                      Current Stage:{' '}
+                      <strong className="text-[#C68B59]">
+                        Stage {currentStageNum}: {mergedStages[currentStageNum - 1]?.name || 'In Progress'}
+                      </strong>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#5D6D5F] bg-[#EBF0EC] px-3 py-1 rounded-xl border border-[#5D6D5F]/30">
+                      Status: {application.status}
+                    </span>
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-              {mergedStages.map((stg) => {
-                const isCompleted = stg.status === 'Completed' || (!stg.status && stg.stageNumber < currentStageNum);
-                const isCurrent = stg.status === 'In Progress' || (!stg.status && stg.stageNumber === currentStageNum);
-                const isActionRequired = stg.status === 'Action Required';
-                const isRejected = stg.status === 'Rejected';
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
+                  {mergedStages.map((stg) => {
+                    const isCompleted = stg.status === 'Completed' || (!stg.status && stg.stageNumber < currentStageNum);
+                    const isCurrent = stg.status === 'In Progress' || (!stg.status && stg.stageNumber === currentStageNum);
+                    const isActionRequired = stg.status === 'Action Required';
+                    const isRejected = stg.status === 'Rejected';
 
-                return (
-                  <div
-                    key={stg.stageNumber}
-                    className={`p-3.5 rounded-2xl border flex flex-col justify-between space-y-2.5 transition-all ${
-                      isActionRequired
-                        ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/40 shadow-xs'
-                        : isRejected
-                        ? 'bg-red-50 border-red-300 ring-2 ring-red-400/40 shadow-xs'
-                        : isCurrent
-                        ? 'bg-[#F4F1EA] border-[#C68B59] ring-2 ring-[#C68B59]/40 shadow-xs'
-                        : isCompleted
-                        ? 'bg-[#EBF0EC] border-[#5D6D5F]/50 text-[#2D332E]'
-                        : 'bg-[#F4F1EA]/40 border-[#E5DFD3] text-gray-400 opacity-70'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span
-                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded ${
+                    return (
+                      <div
+                        key={stg.stageNumber}
+                        className={`p-3.5 rounded-2xl border flex flex-col justify-between space-y-2.5 transition-all ${
                           isActionRequired
-                            ? 'bg-amber-600 text-white'
+                            ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/40 shadow-xs'
                             : isRejected
-                            ? 'bg-red-600 text-white'
-                            : isCompleted
-                            ? 'bg-[#5D6D5F] text-white'
+                            ? 'bg-red-50 border-red-300 ring-2 ring-red-400/40 shadow-xs'
                             : isCurrent
-                            ? 'bg-[#C68B59] text-white'
-                            : 'bg-gray-200 text-gray-600'
+                            ? 'bg-[#F4F1EA] border-[#C68B59] ring-2 ring-[#C68B59]/40 shadow-xs'
+                            : isCompleted
+                            ? 'bg-[#EBF0EC] border-[#5D6D5F]/50 text-[#2D332E]'
+                            : 'bg-[#F4F1EA]/40 border-[#E5DFD3] text-gray-400 opacity-70'
                         }`}
                       >
-                        STAGE {stg.stageNumber.toString().padStart(2, '0')}
-                      </span>
-                      {isCompleted && <CheckCircle2 className="w-4 h-4 text-[#5D6D5F]" />}
-                      {isCurrent && <Clock className="w-4 h-4 text-[#C68B59] animate-spin" />}
-                      {isActionRequired && <AlertTriangle className="w-4 h-4 text-amber-600" />}
-                      {isRejected && <AlertCircle className="w-4 h-4 text-red-600" />}
-                    </div>
-
-                    <div>
-                      <h4 className="text-xs font-bold leading-tight text-[#2D332E]">{stg.name}</h4>
-                      <p className="text-[10px] leading-tight line-clamp-2 mt-1 text-gray-500">{stg.description}</p>
-                      {stg.remarks && (
-                        <div className="mt-1.5 p-1.5 bg-white/70 rounded-lg text-[10px] text-[#2D332E] border border-black/5">
-                          <strong>Note:</strong> {stg.remarks}
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded ${
+                              isActionRequired
+                                ? 'bg-amber-600 text-white'
+                                : isRejected
+                                ? 'bg-red-600 text-white'
+                                : isCompleted
+                                ? 'bg-[#5D6D5F] text-white'
+                                : isCurrent
+                                ? 'bg-[#C68B59] text-white'
+                                : 'bg-gray-200 text-gray-600'
+                            }`}
+                          >
+                            STAGE {stg.stageNumber.toString().padStart(2, '0')}
+                          </span>
+                          {isCompleted && <CheckCircle2 className="w-4 h-4 text-[#5D6D5F]" />}
+                          {isCurrent && <Clock className="w-4 h-4 text-[#C68B59] animate-spin" />}
+                          {isActionRequired && <AlertTriangle className="w-4 h-4 text-amber-600" />}
+                          {isRejected && <AlertCircle className="w-4 h-4 text-red-600" />}
                         </div>
-                      )}
-                      {stg.actionRequiredReason && (
-                        <div className="mt-1.5 p-1.5 bg-amber-100 rounded-lg text-[10px] text-amber-900 border border-amber-200">
-                          <strong>Action:</strong> {stg.actionRequiredReason}
-                        </div>
-                      )}
-                    </div>
 
-                    <div className="pt-1 text-[9px] font-bold uppercase tracking-wider text-right">
-                      <span
-                        className={
-                          isCompleted
-                            ? 'text-[#5D6D5F]'
-                            : isCurrent
-                            ? 'text-[#C68B59]'
-                            : isActionRequired
-                            ? 'text-amber-700'
-                            : isRejected
-                            ? 'text-red-700'
-                            : 'text-gray-400'
-                        }
-                      >
-                        {stg.status || (isCompleted ? 'Completed' : isCurrent ? 'In Progress' : 'Pending')}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                        <div>
+                          <h4 className="text-xs font-bold leading-tight text-[#2D332E]">{stg.name}</h4>
+                          <p className="text-[10px] leading-tight line-clamp-2 mt-1 text-gray-500">{stg.description}</p>
+                          {stg.remarks && (
+                            <div className="mt-1.5 p-1.5 bg-white/70 rounded-lg text-[10px] text-[#2D332E] border border-black/5">
+                              <strong>Note:</strong> {stg.remarks}
+                            </div>
+                          )}
+                          {stg.actionRequiredReason && (
+                            <div className="mt-1.5 p-1.5 bg-amber-100 rounded-lg text-[10px] text-amber-900 border border-amber-200">
+                              <strong>Action:</strong> {stg.actionRequiredReason}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="pt-1 text-[9px] font-bold uppercase tracking-wider text-right">
+                          <span
+                            className={
+                              isCompleted
+                                ? 'text-[#5D6D5F]'
+                                : isCurrent
+                                ? 'text-[#C68B59]'
+                                : isActionRequired
+                                ? 'text-amber-700'
+                                : isRejected
+                                ? 'text-red-700'
+                                : 'text-gray-400'
+                            }
+                          >
+                            {stg.status || (isCompleted ? 'Completed' : isCurrent ? 'In Progress' : 'Pending')}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         )}
 

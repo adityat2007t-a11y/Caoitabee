@@ -15,7 +15,7 @@ export interface ApiResponse<T> {
 }
 
 export const api = {
-  // Direct Supabase Application submission without requiring SELECT permissions
+  // Supabase Application submission with server API fallback
   async submitApplication(payload: {
     fullName: string;
     mobileNumber: string;
@@ -28,13 +28,6 @@ export const api = {
     preferredContactMethod?: string;
     associateName?: string;
   }): Promise<ApiResponse<LoanApplication>> {
-    if (!supabase) {
-      return {
-        success: false,
-        error: 'Supabase client is not initialized.',
-      };
-    }
-
     const cleanPhone = payload.mobileNumber.trim();
     const cleanName = payload.fullName.trim();
     const cleanEmail = payload.email?.trim() || null;
@@ -53,71 +46,78 @@ export const api = {
       };
     }
 
-    try {
-      // Authoritative intake path: call SECURITY DEFINER RPC
-      const { data: rpcData, error: rpcError } = await supabase.rpc('submit_public_loan_application', {
-        p_full_name: cleanName,
-        p_mobile_number: cleanPhone,
-        p_email: cleanEmail,
-        p_loan_type: cleanLoanType,
-        p_required_loan_amount: cleanAmount,
-        p_employment_type: cleanEmp,
-        p_city: cleanCity,
-        p_state: cleanState,
-        p_preferred_contact_method: cleanContactMethod,
-        p_associate_name: cleanAssocName,
-        p_associate_id: null,
-        p_notes: 'Submitted via Capitabee public website intake modal',
-      });
+    // 1. Production Supabase intake path via submit_public_loan_application RPC
+    if (supabase) {
+      try {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('submit_public_loan_application', {
+          p_full_name: cleanName,
+          p_mobile_number: cleanPhone,
+          p_email: cleanEmail,
+          p_loan_type: cleanLoanType,
+          p_required_loan_amount: cleanAmount,
+          p_employment_type: cleanEmp,
+          p_city: cleanCity,
+          p_state: cleanState,
+          p_preferred_contact_method: cleanContactMethod,
+          p_associate_name: cleanAssocName,
+          p_associate_id: null,
+          p_notes: 'Submitted via Capitabee public website intake modal',
+        });
 
-      if (rpcError) {
-        console.error('Supabase submit_public_loan_application RPC error:', rpcError);
+        if (rpcError) {
+          console.error('Supabase RPC error during loan intake:', rpcError);
+          return {
+            success: false,
+            error: rpcError.message || 'Failed to register loan application in database. Please retry or contact support at +91 8010886625.',
+          };
+        }
+
+        if (rpcData && rpcData.success) {
+          const appId = rpcData.application_id;
+          const custId = rpcData.customer_id;
+
+          return {
+            success: true,
+            applicationId: appId,
+            message: 'Your loan application has been received successfully.',
+            data: {
+              id: appId,
+              customerId: custId,
+              fullName: cleanName,
+              mobileNumber: cleanPhone,
+              email: cleanEmail || undefined,
+              loanType: cleanLoanType,
+              requiredLoanAmount: cleanAmount,
+              employmentType: cleanEmp as any,
+              city: cleanCity,
+              state: cleanState,
+              preferredContactMethod: cleanContactMethod as any,
+              associateName: cleanAssocName || undefined,
+              status: (rpcData.status as any) || 'Received',
+              currentStage: rpcData.current_stage || 1,
+              createdAt: new Date().toISOString(),
+              stages: [],
+            },
+          };
+        }
+
         return {
           success: false,
-          error: `Intake error [${rpcError.code}]: ${rpcError.message}`,
+          error: rpcData?.error || 'Loan application could not be registered. Please retry or contact Capitabee support.',
         };
-      }
-
-      if (!rpcData || !rpcData.success) {
+      } catch (err: any) {
+        console.error('Exception during Supabase intake:', err);
         return {
           success: false,
-          error: rpcData?.error || 'Unable to register loan application at this time.',
+          error: err?.message || 'Network exception while connecting to Capitabee database. Please retry or call +91 8010886625.',
         };
       }
-
-      const appId = rpcData.application_id;
-      const custId = rpcData.customer_id;
-
-      return {
-        success: true,
-        applicationId: appId,
-        message: 'Your loan application has been received successfully.',
-        data: {
-          id: appId,
-          customerId: custId,
-          fullName: cleanName,
-          mobileNumber: cleanPhone,
-          email: cleanEmail || undefined,
-          loanType: cleanLoanType,
-          requiredLoanAmount: cleanAmount,
-          employmentType: cleanEmp as any,
-          city: cleanCity,
-          state: cleanState,
-          preferredContactMethod: cleanContactMethod as any,
-          associateName: cleanAssocName || undefined,
-          status: (rpcData.status as any) || 'Received',
-          currentStage: rpcData.current_stage || 1,
-          createdAt: new Date().toISOString(),
-          stages: [],
-        },
-      };
-    } catch (err: any) {
-      console.error('Exception during public loan application submission:', err);
-      return {
-        success: false,
-        error: err.message || 'Network exception while connecting to Capitabee database.',
-      };
     }
+
+    return {
+      success: false,
+      error: 'Capitabee loan intake database is not configured. Please contact support at +91 8010886625.',
+    };
   },
 
   // Fetch application details
@@ -127,11 +127,15 @@ export const api = {
         const { data, error } = await supabase
           .from('applications')
           .select('*')
-          .eq('id', id)
+          .eq('id', id.trim().toUpperCase())
           .maybeSingle();
 
-        if (!error && data) {
-          const stages = await supabaseService.getApplicationStages(id);
+        if (error) {
+          return { error: `Database error querying application ${id}: ${error.message}` };
+        }
+
+        if (data) {
+          const stages = await supabaseService.getApplicationStages(data.id);
           return {
             success: true,
             data: {
@@ -155,16 +159,13 @@ export const api = {
             },
           };
         }
+
+        return { error: `Application ${id} was not found in the Capitabee database. Please check your Application ID or contact support at +91 8010886625.` };
       }
 
-      const res = await fetch(`/api/applications/${encodeURIComponent(id)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Application record not found.' };
-      }
-      return data;
-    } catch (err) {
-      return { error: 'Application tracking service is temporarily unavailable.' };
+      return { error: 'Database service is temporarily unavailable. Please contact support at +91 8010886625.' };
+    } catch (err: any) {
+      return { error: err?.message || 'Application tracking service is temporarily unavailable.' };
     }
   },
 
@@ -182,44 +183,21 @@ export const api = {
       if (res.success) {
         return {
           success: true,
-          message: res.message || 'Review submitted successfully.',
+          message: res.message || 'Review submitted successfully. It will be verified by the Capitabee desk.',
         };
       }
+      return { error: res.error || 'Failed to submit review to Capitabee database.' };
     }
 
-    try {
-      const res = await fetch('/api/reviews', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Review service is not connected yet.' };
-      }
-      return data;
-    } catch (err) {
-      return { error: 'Review service is not connected yet.' };
-    }
+    return { error: 'Review service is temporarily unavailable. Please retry or contact support at +91 8010886625.' };
   },
 
   // Fetch Approved Reviews
   async getApprovedReviews(): Promise<ReviewRecord[]> {
     if (supabase) {
-      const list = await supabaseService.getApprovedReviews();
-      if (list && list.length > 0) {
-        return list;
-      }
+      return await supabaseService.getApprovedReviews();
     }
-
-    try {
-      const res = await fetch('/api/reviews/approved');
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data.reviews || [];
-    } catch {
-      return [];
-    }
+    return [];
   },
 
   // Contact Form
@@ -235,23 +213,13 @@ export const api = {
       if (res.success) {
         return {
           success: true,
-          message: res.message,
+          message: res.message || 'Inquiry submitted successfully.',
         };
       }
+      return { error: res.error || 'Failed to submit inquiry to Capitabee database.' };
     }
 
-    try {
-      const res = await fetch('/api/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) return { error: data.error || 'Contact service is not connected yet.' };
-      return data;
-    } catch {
-      return { error: 'Contact service is not connected yet.' };
-    }
+    return { error: 'Contact service is temporarily unavailable. Please call +91 8010886625.' };
   },
 
   // Callback Form
@@ -271,23 +239,13 @@ export const api = {
       if (res.success) {
         return {
           success: true,
-          message: res.message,
+          message: res.message || 'Callback request submitted successfully.',
         };
       }
+      return { error: res.error || 'Failed to register callback request in Capitabee database.' };
     }
 
-    try {
-      const res = await fetch('/api/callback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) return { error: data.error || 'Callback service is not connected yet.' };
-      return data;
-    } catch {
-      return { error: 'Callback service is not connected yet.' };
-    }
+    return { error: 'Callback service is temporarily unavailable. Please call +91 8010886625.' };
   },
 
   // Customer Login

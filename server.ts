@@ -165,10 +165,10 @@ app.get('/api/config', (req, res) => {
       goldLoan: 'Rate available based on lender and applicant profile.',
     },
     metrics: {
-      happyCustomers: '5,000+',
-      loanDisbursed: '₹1,000 Cr+',
       partnerNetwork: PARTNER_COUNT_LABEL,
+      loanProductsCount: '17 Products',
       transparentJourney: '12-Stage',
+      homeLoanStartingRate: '7.20%',
     },
   });
 });
@@ -217,6 +217,22 @@ app.post('/api/applications', (req, res) => {
     };
 
     applicationsDb.push(newApplication);
+
+    // Register customer account in database so the customer can access their portal
+    const customerId = `CUST-${randomSuffix}`;
+    const newAccount: ServerCustomerAccount = {
+      customerId,
+      passwordHash: String(mobileNumber).trim(), // Default initial access password is applicant phone number
+      applicationId,
+      fullName: newApplication.fullName,
+      mobileNumber: newApplication.mobileNumber,
+      email: newApplication.email,
+      loanType: newApplication.loanType,
+      requestedAmount: newApplication.requiredLoanAmount,
+      associateName: newApplication.associateName,
+      assignedLoanOfficer: 'Capitabee Loan Processing Team',
+    };
+    customerAccountsDb.set(customerId, newAccount);
 
     // Seed default document checklist requirements for this application
     const docList = [
@@ -295,10 +311,25 @@ app.post('/api/customer/login', (req, res) => {
   const cleanId = String(customerId).trim().toUpperCase();
   const cleanPass = String(password).trim();
 
-  const account = customerAccountsDb.get(cleanId);
-  if (!account || account.passwordHash !== cleanPass) {
+  // Flexible credential matching (CustomerId, ApplicationId, Mobile, or Email)
+  let account: ServerCustomerAccount | undefined = customerAccountsDb.get(cleanId);
+  if (!account) {
+    for (const acc of customerAccountsDb.values()) {
+      if (
+        acc.customerId.toUpperCase() === cleanId ||
+        acc.applicationId.toUpperCase() === cleanId ||
+        acc.mobileNumber === String(customerId).trim() ||
+        (acc.email && acc.email.toLowerCase() === String(customerId).trim().toLowerCase())
+      ) {
+        account = acc;
+        break;
+      }
+    }
+  }
+
+  if (!account || (account.passwordHash !== cleanPass && account.mobileNumber !== cleanPass)) {
     return res.status(401).json({
-      error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate.',
+      error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate or match your registered application credentials.',
     });
   }
 
@@ -669,7 +700,7 @@ app.post('/api/callback', (req, res) => {
 });
 
 // 9. AI Advisor Powered by Gemini API (Server-Side)
-app.post('/api/ai-advisor', async (req, res) => {
+app.post(['/api/ai-advisor', '/api/ai/advisor'], async (req, res) => {
   try {
     const { message, conversationHistory } = req.body;
 
@@ -714,7 +745,7 @@ STRICT BOUNDARIES:
     const userPrompt = String(message).trim();
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+      model: 'gemini-3.8-flash',
       contents: userPrompt,
       config: {
         systemInstruction: systemPrompt,

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { authService } from '../services/auth';
+import { supabase } from '../config/supabase';
 
 interface LoginPageProps {
   onOpenApplyModal: () => void;
@@ -24,8 +25,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [customerId, setCustomerId] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  const navigate = (path: string) => {
+    if (onNavigate) {
+      onNavigate(path);
+    } else {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  };
 
   // Forgot password modal/inline state
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -36,51 +46,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   // If already authenticated, redirect to dashboard
   useEffect(() => {
     if (authService.isAuthenticated()) {
-      if (onNavigate) {
-        onNavigate('/customer/dashboard');
-      } else {
-        window.history.pushState({}, '', '/customer/dashboard');
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }
+      navigate('/dashboard');
     }
   }, [onNavigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
-    setInfoMessage(null);
-
-    const cleanId = customerId.trim();
-    const cleanPassword = password.trim();
-
-    if (!cleanId || !cleanPassword) {
-      setErrorMessage('Please enter both your Customer ID and Password.');
-      return;
-    }
-
+    setError(null);
     setIsLoading(true);
 
-    const res = await authService.login({
-      customerId: cleanId,
-      password: cleanPassword,
-    });
+    const cleanId = customerId.trim();
+    const cleanIdLower = cleanId.toLowerCase();
+    const cleanPassword = password.trim();
 
-    setIsLoading(false);
+    try {
+      if (!supabase) {
+        throw new Error('Supabase client not initialized');
+      }
 
-    if (!res.success) {
-      // Strictly report backend error, never mock success
-      setErrorMessage(
-        res.error || 'Customer authentication service is not connected yet. Please try again later.'
-      );
-      return;
-    }
+      // Query applications table first
+      const { data: appData, error: appError } = await supabase
+        .from('applications')
+        .select('*')
+        .or(`customer_id.ilike.${cleanIdLower},email.ilike.${cleanIdLower}`)
+        .eq('password', cleanPassword)
+        .maybeSingle();
 
-    // Real authentication succeeded
-    if (onNavigate) {
-      onNavigate('/customer/dashboard');
-    } else {
-      window.history.pushState({}, '', '/customer/dashboard');
-      window.dispatchEvent(new PopStateEvent('popstate'));
+      if (appData) {
+        sessionStorage.setItem('current_customer', JSON.stringify(appData));
+        navigate('/dashboard');
+        return;
+      }
+
+      // Query customers table as fallback
+      const { data: custData, error: custError } = await supabase
+        .from('customers')
+        .select('*')
+        .or(`customer_id.ilike.${cleanIdLower},email.ilike.${cleanIdLower}`)
+        .eq('password', cleanPassword)
+        .maybeSingle();
+
+      if (custData) {
+        sessionStorage.setItem('current_customer', JSON.stringify(custData));
+        navigate('/dashboard');
+        return;
+      }
+
+      setError("Invalid Customer ID or Password. Credentials must be issued by an authorized CapitaBee Loan Associate.");
+    } catch (err) {
+      console.error("Login Error:", err);
+      setError("System error during authentication.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -130,12 +147,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </div>
 
           {/* Feedback messages */}
-          {errorMessage && (
+          {error && (
             <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2.5 animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
               <div className="space-y-0.5">
                 <span className="font-bold block">Authentication Notice</span>
-                <span className="leading-relaxed">{errorMessage}</span>
+                <span className="leading-relaxed">{error}</span>
               </div>
             </div>
           )}
@@ -151,16 +168,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-[#2D332E] mb-1.5">
-                Customer ID or Email <span className="text-red-500">*</span>
+                Customer ID <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 autoComplete="username"
-                placeholder="Enter Customer ID or registered email"
+                placeholder="Enter assigned Customer ID (e.g. CUST-2026-000001)"
                 value={customerId}
                 onChange={(e) => setCustomerId(e.target.value)}
-                className="w-full px-4 py-3 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none"
+                className="w-full px-4 py-3 text-sm bg-[#FDFCF8] border border-[#E5DFD3] rounded-xl text-[#2D332E] focus:ring-2 focus:ring-[#C68B59] focus:outline-none uppercase placeholder:normal-case font-mono"
               />
             </div>
 

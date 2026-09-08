@@ -23,11 +23,15 @@ class AuthService {
       try {
         const storedToken = sessionStorage.getItem(STORAGE_KEYS.TOKEN) || localStorage.getItem(STORAGE_KEYS.TOKEN);
         const storedUser = sessionStorage.getItem(STORAGE_KEYS.USER) || localStorage.getItem(STORAGE_KEYS.USER);
+        const currentCust = sessionStorage.getItem('current_customer');
+
         if (storedToken) {
           this.token = storedToken;
         }
         if (storedUser) {
           this.currentUser = JSON.parse(storedUser);
+        } else if (currentCust) {
+          this.hydrateFromCurrentCustomer(currentCust);
         }
       } catch {
         this.token = null;
@@ -36,10 +40,38 @@ class AuthService {
     }
   }
 
+  private hydrateFromCurrentCustomer(raw: string | null) {
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      this.token = this.token || 'supabase-direct-authenticated';
+      this.currentUser = {
+        customerId: parsed.customer_id || parsed.customerId || parsed.id || '',
+        fullName: parsed.full_name || parsed.fullName || parsed.name || 'Valued Customer',
+        email: parsed.email || '',
+        mobileNumber: parsed.mobile_number || parsed.phone || parsed.mobile || '',
+        loanType: parsed.loan_type || parsed.loanType || 'Loan Assistance',
+        applicationId: parsed.application_id || (typeof parsed.id === 'string' && parsed.id.startsWith('APP-') ? parsed.id : ''),
+        currentStage: parsed.current_stage || parsed.currentStage || 1,
+        applicationStatus: parsed.status || 'Received',
+        requestedAmount: Number(parsed.required_loan_amount || parsed.loan_amount || parsed.requiredLoanAmount || 0),
+        createdAt: parsed.created_at || new Date().toISOString(),
+      };
+    } catch {
+      // ignore JSON parse error
+    }
+  }
+
   /**
    * Returns current authenticated user or null.
    */
   getCurrentUser(): CustomerUser | null {
+    if (!this.currentUser && typeof window !== 'undefined') {
+      const currentCust = sessionStorage.getItem('current_customer');
+      if (currentCust) {
+        this.hydrateFromCurrentCustomer(currentCust);
+      }
+    }
     return this.currentUser;
   }
 
@@ -54,6 +86,9 @@ class AuthService {
    * Checks if user has an active session token.
    */
   isAuthenticated(): boolean {
+    if (typeof window !== 'undefined' && sessionStorage.getItem('current_customer')) {
+      return true;
+    }
     return Boolean(this.token || this.currentUser);
   }
 
@@ -92,67 +127,19 @@ class AuthService {
           token: this.token,
           customer: supaRes.customer,
         };
-      } else if (supaRes.error && !supaRes.error.includes('not initialized')) {
-        // If Supabase gave a specific authentication failure, return it
-        return {
-          success: false,
-          error: supaRes.error,
-        };
-      }
-    }
-
-    // 2. Fallback to API endpoint
-    try {
-      const res = await fetch(`${AUTH_API_BASE_URL}/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({
-          customerId: cleanId,
-          password: cleanPassword,
-        }),
-      });
-
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok || !data || !data.success) {
-        if (res.status === 404 || res.status === 502 || res.status === 503) {
-          return {
-            success: false,
-            error: 'Customer authentication service is not connected yet. Please try again later or contact your loan associate.',
-          };
-        }
-        return {
-          success: false,
-          error: data?.error || 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate.',
-        };
       }
 
-      // Store REAL session credentials
-      this.token = data.token;
-      this.currentUser = data.customer;
-
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
-        sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(data.customer));
-        if (data.customer?.applicationId) {
-          sessionStorage.setItem(STORAGE_KEYS.SELECTED_APP, data.customer.applicationId);
-        }
-      }
-
-      return {
-        success: true,
-        token: data.token,
-        customer: data.customer,
-      };
-    } catch {
+      // Return Supabase auth / customer error directly without fallback to in-memory store
       return {
         success: false,
-        error: 'Customer authentication service is not connected yet. Please try again later.',
+        error: supaRes.error || 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate (+91 8010886625).',
       };
     }
+
+    return {
+      success: false,
+      error: 'Capitabee Customer Authentication is temporarily unavailable. Please retry or contact support at +91 8010886625.',
+    };
   }
 
   /**
@@ -247,12 +234,12 @@ class AuthService {
       try {
         const session = await supabaseService.getSession();
         const userId = session?.user?.id;
-        const customer = this.currentUser;
+        const customer = this.getCurrentUser();
 
         if (userId || customer) {
           // Fetch all customer applications
-          const applications = userId
-            ? await supabaseService.getCustomerApplications(userId, customer?.customerId)
+          const applications = (userId || customer?.customerId)
+            ? await supabaseService.getCustomerApplications(userId || '', customer?.customerId)
             : [];
 
           // Determine active application
@@ -271,30 +258,64 @@ class AuthService {
             }
           }
 
+          // Fallback: If current_customer stored in sessionStorage is an application record
+          if (!activeApp && typeof window !== 'undefined') {
+            try {
+              const rawCust = sessionStorage.getItem('current_customer');
+              if (rawCust) {
+                const parsed = JSON.parse(rawCust);
+                if (parsed.id && (parsed.required_loan_amount !== undefined || parsed.loan_type !== undefined || String(parsed.id).startsWith('APP-'))) {
+                  activeApp = {
+                    id: parsed.id,
+                    customerId: parsed.customer_id || customer?.customerId || '',
+                    fullName: parsed.full_name || customer?.fullName || 'Customer',
+                    mobileNumber: parsed.mobile_number || customer?.mobileNumber || '',
+                    email: parsed.email || customer?.email || '',
+                    loanType: parsed.loan_type || customer?.loanType || 'Loan Assistance',
+                    requiredLoanAmount: Number(parsed.required_loan_amount || parsed.loan_amount || 0),
+                    employmentType: parsed.employment_type || 'Salaried',
+                    city: parsed.city || '',
+                    state: parsed.state || '',
+                    preferredContactMethod: parsed.preferred_contact_method || 'Phone',
+                    associateId: parsed.associate_id,
+                    associateName: parsed.associate_name,
+                    assignedOfficer: parsed.assigned_officer || parsed.assigned_employee_name,
+                    status: parsed.status || 'Received',
+                    currentStage: parsed.current_stage || 1,
+                    createdAt: parsed.created_at || new Date().toISOString(),
+                    updatedAt: parsed.updated_at,
+                    notes: parsed.notes,
+                    stages: [],
+                  };
+                }
+              }
+            } catch {}
+          }
+
           if (activeAppId && typeof window !== 'undefined') {
             sessionStorage.setItem(STORAGE_KEYS.SELECTED_APP, activeAppId);
           }
 
-          const appIdToQuery = activeAppId || 'CAP-PENDING';
+          const appIdToQuery = activeAppId || '';
 
           // Concurrently fetch stages, documents, messages, timeline, notifications
           const [stages, documents, messages, timeline, notifications] = await Promise.all([
-            supabaseService.getApplicationStages(appIdToQuery),
-            supabaseService.getDocuments(appIdToQuery),
-            supabaseService.getMessages(appIdToQuery),
-            supabaseService.getApplicationTimeline(appIdToQuery),
-            supabaseService.getNotifications(appIdToQuery, userId),
+            appIdToQuery ? supabaseService.getApplicationStages(appIdToQuery) : Promise.resolve([]),
+            appIdToQuery ? supabaseService.getDocuments(appIdToQuery) : Promise.resolve([]),
+            appIdToQuery ? supabaseService.getMessages(appIdToQuery) : Promise.resolve([]),
+            appIdToQuery ? supabaseService.getApplicationTimeline(appIdToQuery) : Promise.resolve([]),
+            supabaseService.getNotifications(appIdToQuery || undefined, userId),
           ]);
 
           const finalApp: LoanApplication = activeApp || {
-            id: appIdToQuery,
-            customerId: customer?.customerId,
+            id: '',
+            customerId: customer?.customerId || '',
             fullName: customer?.fullName || 'Valued Customer',
             mobileNumber: customer?.mobileNumber || '',
             loanType: customer?.loanType || 'Loan Assistance',
             requiredLoanAmount: customer?.requestedAmount || 0,
-            status: customer?.applicationStatus || 'Received',
-            currentStage: customer?.currentStage || 1,
+            status: 'Received',
+            currentStage: 1,
             createdAt: customer?.createdAt || new Date().toISOString(),
             stages: stages,
           };
@@ -330,62 +351,19 @@ class AuthService {
           };
         }
       } catch (err: any) {
-        console.warn('Direct Supabase dashboard fetch encountered error, falling back to API proxy:', err);
+        console.error('Database error fetching customer dashboard:', err);
+        return {
+          success: false,
+          error: err?.message || 'Unable to retrieve customer records from Capitabee database.',
+        };
       }
     }
 
-    // 2. API Proxy Fallback
-    try {
-      const res = await fetch(`${AUTH_API_BASE_URL}/dashboard`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: 'application/json',
-        },
-      });
-
-      const json = await res.json().catch(() => null);
-
-      if (res.status === 401 || res.status === 403) {
-        this.logout();
-        return {
-          success: false,
-          error: 'Your session has expired. Please log in again.',
-        };
-      }
-
-      if (res.status === 502 || res.status === 503 || res.status === 404 || !res.ok) {
-        return {
-          success: false,
-          isNotConnected: true,
-          error: 'Customer authentication service is not connected yet.',
-        };
-      }
-
-      if (!json || !json.success) {
-        return {
-          success: false,
-          error: json?.error || 'Unable to retrieve customer application record.',
-        };
-      }
-
-      return {
-        success: true,
-        data: {
-          customer: json.customer,
-          application: json.application,
-          documents: json.documents || [],
-          messages: json.messages || [],
-          notifications: json.notifications || [],
-        },
-      };
-    } catch {
-      return {
-        success: false,
-        isNotConnected: true,
-        error: 'Customer authentication service is not connected yet.',
-      };
-    }
+    return {
+      success: false,
+      isNotConnected: true,
+      error: 'Customer database service is temporarily unavailable. Please retry or contact your loan associate at +91 8010886625.',
+    };
   }
 
   /**
@@ -544,9 +522,11 @@ class AuthService {
     this.currentUser = null;
 
     if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('current_customer');
       sessionStorage.removeItem(STORAGE_KEYS.TOKEN);
       sessionStorage.removeItem(STORAGE_KEYS.USER);
       sessionStorage.removeItem(STORAGE_KEYS.SELECTED_APP);
+      localStorage.removeItem('current_customer');
       localStorage.removeItem(STORAGE_KEYS.TOKEN);
       localStorage.removeItem(STORAGE_KEYS.USER);
       localStorage.removeItem(STORAGE_KEYS.SELECTED_APP);

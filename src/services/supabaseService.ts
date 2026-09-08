@@ -49,50 +49,50 @@ export const supabaseService = {
 
       // If identifier is not an email, try resolving by customer_id or standard email alias
       if (!cleanIdentifier.includes('@')) {
-        // First try to check if there is a profile or customer record with this customer_id
-        const { data: profile } = await supabase
-          .from('profiles')
+        // Check if there is a customer record with this customer_id to find their registered email
+        const { data: customerRecord } = await supabase
+          .from('customers')
           .select('email, customer_id')
           .eq('customer_id', cleanIdentifier.toUpperCase())
           .maybeSingle();
 
-        if (profile?.email) {
-          emailToAuth = profile.email;
+        if (customerRecord?.email) {
+          emailToAuth = customerRecord.email;
         } else {
-          // Fallback to customer ID email alias format used in Supabase auth setup
+          // Standard customer ID email alias format used in Supabase auth
           emailToAuth = `${cleanIdentifier.toLowerCase()}@customer.capitabee.com`;
         }
       }
 
       // Authenticate with Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      let { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: emailToAuth,
         password: cleanPassword,
       });
 
       if (authError || !authData.user) {
-        // If email alias failed, let's also try raw identifier as email
-        if (emailToAuth !== cleanIdentifier) {
-          const { data: retryAuth, error: retryError } = await supabase.auth.signInWithPassword({
-            email: cleanIdentifier,
+        // If first alias failed, attempt alternative alias: @capitabee.com
+        if (!cleanIdentifier.includes('@')) {
+          const altEmail = `${cleanIdentifier.toLowerCase()}@capitabee.com`;
+          const altRes = await supabase.auth.signInWithPassword({
+            email: altEmail,
             password: cleanPassword,
           });
-          if (retryError || !retryAuth.user) {
-            return {
-              success: false,
-              error: authError?.message || retryError?.message || 'Invalid login credentials. Please check your Customer ID and Password.',
-            };
+          if (altRes.data.user) {
+            authData = altRes.data;
+            authError = null;
           }
-          return await this.buildCustomerUserFromSession(retryAuth.user, retryAuth.session?.access_token);
         }
+      }
 
+      if (authError || !authData.user) {
         return {
           success: false,
-          error: authError?.message || 'Invalid Customer ID or Password. Please contact your loan associate if you need access.',
+          error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate or match your registered application credentials.',
         };
       }
 
-      return await this.buildCustomerUserFromSession(authData.user, authData.session?.access_token);
+      return await this.buildCustomerUserFromSession(authData.user, authData.session?.access_token, cleanIdentifier);
     } catch (err: any) {
       return {
         success: false,
@@ -102,9 +102,9 @@ export const supabaseService = {
   },
 
   /**
-   * Build CustomerUser object from Supabase Auth user & public.profiles / public.applications
+   * Build CustomerUser object from Supabase Auth user & public.customers / public.applications
    */
-  async buildCustomerUserFromSession(user: any, token?: string): Promise<{
+  async buildCustomerUserFromSession(user: any, token?: string, requestedCustomerId?: string): Promise<{
     success: boolean;
     user?: any;
     token?: string;
@@ -116,34 +116,93 @@ export const supabaseService = {
     }
 
     try {
-      // Fetch profile
-      const { data: profile } = await supabase
-        .from('profiles')
+      // 1. Query the customers table using auth_user_id
+      let { data: customerRecord, error: custErr } = await supabase
+        .from('customers')
         .select('*')
-        .eq('id', user.id)
+        .eq('auth_user_id', user.id)
         .maybeSingle();
 
-      // Fetch customer applications
-      let appsQuery = supabase
-        .from('applications')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (profile?.customer_id) {
-        appsQuery = appsQuery.or(`user_id.eq.${user.id},customer_id.eq.${profile.customer_id}`);
-      } else {
-        appsQuery = appsQuery.eq('user_id', user.id);
+      // If not linked by auth_user_id yet, try matching by customer_id if provided
+      if (!customerRecord && requestedCustomerId) {
+        const { data: byId } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('customer_id', requestedCustomerId.toUpperCase())
+          .maybeSingle();
+        if (byId) {
+          customerRecord = byId;
+          // Link auth_user_id if currently null
+          if (!customerRecord.auth_user_id) {
+            await supabase
+              .from('customers')
+              .update({ auth_user_id: user.id })
+              .eq('id', customerRecord.id);
+          }
+        }
       }
 
-      const { data: apps } = await appsQuery;
+      // If still not found, check user metadata
+      if (!customerRecord && user.user_metadata?.customer_id) {
+        const { data: byMeta } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('customer_id', user.user_metadata.customer_id)
+          .maybeSingle();
+        if (byMeta) {
+          customerRecord = byMeta;
+        }
+      }
+
+      // Check portal access enablement
+      if (customerRecord) {
+        if (!customerRecord.portal_access_enabled) {
+          await supabase.auth.signOut();
+          return {
+            success: false,
+            error: 'Your Customer Portal access has not been activated yet. Please contact your assigned Capitabee Loan Associate (+91 8010886625) for portal activation.',
+          };
+        }
+
+        // Update portal_last_login_at
+        try {
+          await supabase
+            .from('customers')
+            .update({ portal_last_login_at: new Date().toISOString() })
+            .eq('id', customerRecord.id);
+        } catch {
+          // non-blocking
+        }
+      }
+
+      // Query customer applications using the correct database relationship:
+      // customers.customer_id = applications.customer_id
+      const effectiveCustomerId = customerRecord?.customer_id || requestedCustomerId?.toUpperCase();
+      let apps: any[] = [];
+      if (effectiveCustomerId) {
+        const { data: appRows } = await supabase
+          .from('applications')
+          .select('*')
+          .eq('customer_id', effectiveCustomerId)
+          .order('created_at', { ascending: false });
+        apps = appRows || [];
+      }
+
       const primaryApp = apps && apps.length > 0 ? apps[0] : null;
 
+      if (!customerRecord && !primaryApp) {
+        return {
+          success: false,
+          error: 'No active customer record found in Capitabee database for this login.',
+        };
+      }
+
       const customerObj: CustomerUser = {
-        customerId: profile?.customer_id || user.user_metadata?.customer_id || primaryApp?.customer_id || `CUST-${user.id.slice(0, 8).toUpperCase()}`,
-        fullName: profile?.full_name || user.user_metadata?.full_name || primaryApp?.full_name || user.email?.split('@')[0] || 'Valued Customer',
-        mobileNumber: profile?.mobile_number || user.user_metadata?.mobile_number || primaryApp?.mobile_number || '',
-        email: profile?.email || user.email || '',
-        applicationId: primaryApp?.id || 'NO-APP-YET',
+        customerId: customerRecord?.customer_id || primaryApp?.customer_id || `CUST-${user.id.slice(0, 8).toUpperCase()}`,
+        fullName: customerRecord?.full_name || primaryApp?.full_name || user.user_metadata?.full_name || 'Valued Customer',
+        mobileNumber: customerRecord?.mobile_number || primaryApp?.mobile_number || user.user_metadata?.mobile_number || '',
+        email: customerRecord?.email || primaryApp?.email || user.email || '',
+        applicationId: primaryApp?.id || '',
         loanType: primaryApp?.loan_type || 'Loan Assistance',
         requestedAmount: primaryApp ? Number(primaryApp.required_loan_amount) : 0,
         associateName: primaryApp?.associate_name || undefined,
@@ -154,7 +213,7 @@ export const supabaseService = {
         assignedLoanOfficer: primaryApp?.assigned_officer || 'Capitabee Loan Processing Desk',
         currentStage: primaryApp?.current_stage || 1,
         applicationStatus: (primaryApp?.status as any) || 'Received',
-        createdAt: primaryApp?.created_at || user.created_at || new Date().toISOString(),
+        createdAt: customerRecord?.created_at || primaryApp?.created_at || user.created_at || new Date().toISOString(),
       };
 
       return {
@@ -165,21 +224,8 @@ export const supabaseService = {
       };
     } catch (err: any) {
       return {
-        success: true,
-        user,
-        token: token || 'supabase-authenticated',
-        customer: {
-          customerId: `CUST-${user.id.slice(0, 8).toUpperCase()}`,
-          fullName: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Valued Customer',
-          mobileNumber: user.user_metadata?.mobile_number || '',
-          email: user.email || '',
-          applicationId: 'CAP-PENDING',
-          loanType: 'Loan Assistance',
-          requestedAmount: 0,
-          currentStage: 1,
-          applicationStatus: 'Received',
-          createdAt: new Date().toISOString(),
-        },
+        success: false,
+        error: err?.message || 'Database error occurred while fetching customer session.',
       };
     }
   },
@@ -219,8 +265,8 @@ export const supabaseService = {
         .order('created_at', { ascending: false });
 
       if (customerId) {
-        query = query.or(`user_id.eq.${userId},customer_id.eq.${customerId}`);
-      } else {
+        query = query.eq('customer_id', customerId);
+      } else if (userId) {
         query = query.eq('user_id', userId);
       }
 

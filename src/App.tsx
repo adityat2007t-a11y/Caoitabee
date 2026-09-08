@@ -145,7 +145,7 @@ export function App() {
       );
     }
 
-    if (currentPath === '/customer/dashboard' || currentPath === '/customer') {
+    if (currentPath === '/customer/dashboard' || currentPath === '/customer' || currentPath === '/dashboard') {
       return (
         <CustomerDashboardPage
           onNavigate={navigate}
