@@ -72,7 +72,7 @@ export function App() {
       );
     }
 
-    if (currentPath === '/about') {
+    if (currentPath === '/about' || currentPath === '/leadership' || currentPath === '/team' || currentPath === '/our-team') {
       return <AboutPage onOpenApplyModal={() => handleOpenApply()} onNavigate={navigate} />;
     }
 

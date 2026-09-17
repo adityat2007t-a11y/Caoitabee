@@ -12,6 +12,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { BRAND_CONFIG, TWELVE_STAGE_JOURNEY } from '../config';
+import { LeadershipTeamSection } from '../components/LeadershipTeamSection';
 
 interface AboutPageProps {
   onOpenApplyModal: () => void;
@@ -68,6 +69,9 @@ export const AboutPage: React.FC<AboutPageProps> = ({ onOpenApplyModal, onNaviga
             </p>
           </div>
         </div>
+
+        {/* Leadership & Advisory Team Section */}
+        <LeadershipTeamSection />
 
         {/* 12-Stage Journey Breakdown */}
         <div className="bg-[#F4F1EA] rounded-3xl p-8 sm:p-10 border border-[#E5DFD3] space-y-8">
