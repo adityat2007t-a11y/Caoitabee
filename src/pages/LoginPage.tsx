@@ -56,46 +56,32 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setIsLoading(true);
 
     const cleanId = customerId.trim();
-    const cleanIdLower = cleanId.toLowerCase();
     const cleanPassword = password.trim();
 
+    if (!cleanId || !cleanPassword) {
+      setError('Please enter both your Customer ID and Password.');
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      if (!supabase) {
-        throw new Error('Supabase client not initialized');
-      }
+      const res = await authService.login({
+        customerId: cleanId,
+        password: cleanPassword,
+      });
 
-      // Query applications table first
-      const { data: appData, error: appError } = await supabase
-        .from('applications')
-        .select('*')
-        .or(`customer_id.ilike.${cleanIdLower},email.ilike.${cleanIdLower}`)
-        .eq('password', cleanPassword)
-        .maybeSingle();
-
-      if (appData) {
-        sessionStorage.setItem('current_customer', JSON.stringify(appData));
+      if (res.success && res.customer) {
         navigate('/dashboard');
         return;
       }
 
-      // Query customers table as fallback
-      const { data: custData, error: custError } = await supabase
-        .from('customers')
-        .select('*')
-        .or(`customer_id.ilike.${cleanIdLower},email.ilike.${cleanIdLower}`)
-        .eq('password', cleanPassword)
-        .maybeSingle();
-
-      if (custData) {
-        sessionStorage.setItem('current_customer', JSON.stringify(custData));
-        navigate('/dashboard');
-        return;
-      }
-
-      setError("Invalid Customer ID or Password. Credentials must be issued by an authorized CapitaBee Loan Associate.");
-    } catch (err) {
-      console.error("Login Error:", err);
-      setError("System error during authentication.");
+      setError(
+        res.error ||
+          'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate.'
+      );
+    } catch (err: any) {
+      console.error('Customer Login Error:', err);
+      setError('System error during authentication. Please retry or contact support at +91 8010886625.');
     } finally {
       setIsLoading(false);
     }

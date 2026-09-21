@@ -24,7 +24,12 @@ export const supabaseService = {
   },
 
   /**
-   * Universal Login: Supports either direct Email or Customer ID (e.g. CUST-XXXX)
+   * Customer Login via Customer ID & Password linked to Supabase Auth.
+   * Enforces:
+   * 1. Secure lookup of customer by customer_id
+   * 2. customers.auth_user_id IS NOT NULL AND customers.portal_access_enabled = true
+   * 3. Resolves linked Supabase Auth identity and authenticates
+   * 4. Enforces applications.customer_id = customers.customer_id data isolation
    */
   async login(identifier: string, password: string): Promise<{
     success: boolean;
@@ -34,69 +39,83 @@ export const supabaseService = {
     error?: string;
   }> {
     if (!supabase) {
-      return { success: false, error: 'Supabase client is not initialized.' };
+      return { success: false, error: 'Capitabee database client is not initialized.' };
     }
 
     const cleanIdentifier = identifier.trim();
     const cleanPassword = password.trim();
 
     if (!cleanIdentifier || !cleanPassword) {
-      return { success: false, error: 'Please enter both your Customer ID / Email and Password.' };
+      return { success: false, error: 'Please enter both your Customer ID and Password.' };
     }
 
     try {
-      let emailToAuth = cleanIdentifier;
+      // 1. Secure lookup in customers table by customer_id
+      const { data: customerRecord, error: lookupErr } = await supabase
+        .from('customers')
+        .select('*')
+        .ilike('customer_id', cleanIdentifier)
+        .maybeSingle();
 
-      // If identifier is not an email, try resolving by customer_id or standard email alias
-      if (!cleanIdentifier.includes('@')) {
-        // Check if there is a customer record with this customer_id to find their registered email
-        const { data: customerRecord } = await supabase
-          .from('customers')
-          .select('email, customer_id')
-          .eq('customer_id', cleanIdentifier.toUpperCase())
-          .maybeSingle();
-
-        if (customerRecord?.email) {
-          emailToAuth = customerRecord.email;
-        } else {
-          // Standard customer ID email alias format used in Supabase auth
-          emailToAuth = `${cleanIdentifier.toLowerCase()}@customer.capitabee.com`;
-        }
-      }
-
-      // Authenticate with Supabase Auth
-      let { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: emailToAuth,
-        password: cleanPassword,
-      });
-
-      if (authError || !authData.user) {
-        // If first alias failed, attempt alternative alias: @capitabee.com
-        if (!cleanIdentifier.includes('@')) {
-          const altEmail = `${cleanIdentifier.toLowerCase()}@capitabee.com`;
-          const altRes = await supabase.auth.signInWithPassword({
-            email: altEmail,
-            password: cleanPassword,
-          });
-          if (altRes.data.user) {
-            authData = altRes.data;
-            authError = null;
-          }
-        }
-      }
-
-      if (authError || !authData.user) {
+      if (lookupErr || !customerRecord) {
         return {
           success: false,
-          error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate or match your registered application credentials.',
+          error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate.',
         };
       }
 
-      return await this.buildCustomerUserFromSession(authData.user, authData.session?.access_token, cleanIdentifier);
+      // 2. Customer Access Validation (Requirement 3)
+      // Verify: customers.auth_user_id IS NOT NULL AND customers.portal_access_enabled = true
+      if (!customerRecord.auth_user_id || customerRecord.portal_access_enabled !== true) {
+        return {
+          success: false,
+          error: 'Customer Portal access is currently inactive. Please contact Capitabee Financial Services.',
+        };
+      }
+
+      // 3. Resolve linked Supabase Auth identity candidates
+      const candidateEmails: string[] = [];
+      if (customerRecord.email && customerRecord.email.includes('@')) {
+        candidateEmails.push(customerRecord.email.trim().toLowerCase());
+      }
+      candidateEmails.push(`${customerRecord.customer_id.toLowerCase()}@customer.capitabee.com`);
+      candidateEmails.push(`${customerRecord.customer_id.toLowerCase()}@capitabee.com`);
+      if (customerRecord.mobile_number) {
+        const cleanMobile = customerRecord.mobile_number.replace(/[^0-9]/g, '');
+        if (cleanMobile) {
+          candidateEmails.push(`${cleanMobile}@customer.capitabee.com`);
+        }
+      }
+
+      let authData: any = null;
+      for (const email of candidateEmails) {
+        const res = await supabase.auth.signInWithPassword({
+          email,
+          password: cleanPassword,
+        });
+
+        if (res.data?.session && res.data?.user) {
+          // Enforce linked customer.auth_user_id identity match
+          if (customerRecord.auth_user_id && res.data.user.id !== customerRecord.auth_user_id) {
+            continue;
+          }
+          authData = res.data;
+          break;
+        }
+      }
+
+      if (!authData?.session || !authData?.user) {
+        return {
+          success: false,
+          error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate.',
+        };
+      }
+
+      return await this.buildCustomerUserFromSession(authData.user, authData.session?.access_token, customerRecord.customer_id);
     } catch (err: any) {
       return {
         success: false,
-        error: err?.message || 'Unable to connect to Supabase authentication.',
+        error: err?.message || 'Unable to connect to Capitabee authentication service.',
       };
     }
   },
@@ -123,79 +142,48 @@ export const supabaseService = {
         .eq('auth_user_id', user.id)
         .maybeSingle();
 
-      // If not linked by auth_user_id yet, try matching by customer_id if provided
+      // If requestedCustomerId provided and not matched by user.id directly, verify link
       if (!customerRecord && requestedCustomerId) {
         const { data: byId } = await supabase
           .from('customers')
           .select('*')
-          .eq('customer_id', requestedCustomerId.toUpperCase())
+          .ilike('customer_id', requestedCustomerId)
           .maybeSingle();
-        if (byId) {
+        if (byId && (byId.auth_user_id === user.id || !byId.auth_user_id)) {
           customerRecord = byId;
-          // Link auth_user_id if currently null
-          if (!customerRecord.auth_user_id) {
-            await supabase
-              .from('customers')
-              .update({ auth_user_id: user.id })
-              .eq('id', customerRecord.id);
-          }
         }
       }
 
-      // If still not found, check user metadata
-      if (!customerRecord && user.user_metadata?.customer_id) {
-        const { data: byMeta } = await supabase
-          .from('customers')
-          .select('*')
-          .eq('customer_id', user.user_metadata.customer_id)
-          .maybeSingle();
-        if (byMeta) {
-          customerRecord = byMeta;
-        }
-      }
-
-      // Check portal access enablement
-      if (customerRecord) {
-        if (!customerRecord.portal_access_enabled) {
-          await supabase.auth.signOut();
-          return {
-            success: false,
-            error: 'Your Customer Portal access has not been activated yet. Please contact your assigned Capitabee Loan Associate (+91 8010886625) for portal activation.',
-          };
-        }
-
-        // Update portal_last_login_at
-        try {
-          await supabase
-            .from('customers')
-            .update({ portal_last_login_at: new Date().toISOString() })
-            .eq('id', customerRecord.id);
-        } catch {
-          // non-blocking
-        }
-      }
-
-      // Query customer applications using the correct database relationship:
-      // customers.customer_id = applications.customer_id
-      const effectiveCustomerId = customerRecord?.customer_id || requestedCustomerId?.toUpperCase();
-      let apps: any[] = [];
-      if (effectiveCustomerId) {
-        const { data: appRows } = await supabase
-          .from('applications')
-          .select('*')
-          .eq('customer_id', effectiveCustomerId)
-          .order('created_at', { ascending: false });
-        apps = appRows || [];
-      }
-
-      const primaryApp = apps && apps.length > 0 ? apps[0] : null;
-
-      if (!customerRecord && !primaryApp) {
+      // Check portal access enablement and auth_user_id presence
+      if (!customerRecord || !customerRecord.auth_user_id || customerRecord.portal_access_enabled !== true) {
+        await supabase.auth.signOut();
         return {
           success: false,
-          error: 'No active customer record found in Capitabee database for this login.',
+          error: 'Customer Portal access is currently inactive. Please contact Capitabee Financial Services.',
         };
       }
+
+      // Update portal_last_login_at
+      try {
+        await supabase
+          .from('customers')
+          .update({ portal_last_login_at: new Date().toISOString() })
+          .eq('id', customerRecord.id);
+      } catch {
+        // non-blocking
+      }
+
+      // Query customer applications using the required database relationship:
+      // applications.customer_id = customers.customer_id
+      // (Never join on customers.id UUID)
+      const { data: appRows } = await supabase
+        .from('applications')
+        .select('*')
+        .eq('customer_id', customerRecord.customer_id)
+        .order('created_at', { ascending: false });
+
+      const apps = appRows || [];
+      const primaryApp = apps.length > 0 ? apps[0] : null;
 
       const customerObj: CustomerUser = {
         customerId: customerRecord?.customer_id || primaryApp?.customer_id || `CUST-${user.id.slice(0, 8).toUpperCase()}`,

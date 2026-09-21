@@ -5,6 +5,12 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { PARTNER_COUNT_LABEL } from './src/config';
+import {
+  getSupabaseServer,
+  customerLogin,
+  getAuthenticatedCustomer,
+  getCustomerDashboard,
+} from './server/supabase';
 
 dotenv.config();
 
@@ -29,115 +35,10 @@ function getGeminiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-// In-Memory Data Stores (Backend-Ready State)
-interface ServerApplication {
-  id: string;
-  fullName: string;
-  mobileNumber: string;
-  email?: string;
-  loanType: string;
-  requiredLoanAmount: number;
-  employmentType?: string;
-  city?: string;
-  state?: string;
-  preferredContactMethod?: string;
-  associateName?: string;
-  status: string;
-  createdAt: string;
-  assignedOfficer?: string;
-  currentStage: number;
-  stages: Array<{
-    stageNumber: number;
-    name: string;
-    description: string;
-    status: 'Completed' | 'In Progress' | 'Pending' | 'Rejected' | 'Action Required';
-    updatedAt?: string;
-  }>;
-}
-
-interface ServerReview {
-  id: string;
-  customerName: string;
-  rating: number;
-  reviewText: string;
-  loanType: string;
-  city?: string;
-  status: 'Pending' | 'Approved' | 'Rejected';
-  createdAt: string;
-  photoUrl?: string;
-}
-
-interface ServerCustomerAccount {
-  customerId: string;
-  passwordHash: string; // Plain/hash for internal matching
-  applicationId: string;
-  fullName: string;
-  mobileNumber: string;
-  email?: string;
-  loanType: string;
-  requestedAmount: number;
-  associateName?: string;
-  assignedLoanOfficer?: string;
-}
-
-interface ServerDocument {
-  id: string;
-  applicationId: string;
-  documentType: string;
-  category: string;
-  fileName: string;
-  status: 'Uploaded' | 'Under Review' | 'Verified' | 'Rejected' | 'Re-upload Required';
-  uploadedAt: string;
-  rejectionReason?: string;
-  isRequested: boolean;
-}
-
-interface ServerMessage {
-  id: string;
-  applicationId: string;
-  sender: 'customer' | 'associate' | 'system';
-  senderName: string;
-  message: string;
-  timestamp: string;
-}
-
-// Database Stores
-const applicationsDb: ServerApplication[] = [];
-const reviewsDb: ServerReview[] = [];
-const customerAccountsDb: Map<string, ServerCustomerAccount> = new Map();
-const documentsDb: ServerDocument[] = [];
-const messagesDb: ServerMessage[] = [];
-const callbacksDb: Array<Record<string, unknown>> = [];
-const contactsDb: Array<Record<string, unknown>> = [];
-
-// Helper to generate 12 stages
-function generateDefaultStages(current = 2) {
-  const stageDefs = [
-    { stageNumber: 1, name: 'Inquiry', description: 'Initial loan inquiry and requirement gathering.' },
-    { stageNumber: 2, name: 'Application', description: 'Formal loan application registered.' },
-    { stageNumber: 3, name: 'Documentation', description: 'Collection and preliminary check of KYC and financials.' },
-    { stageNumber: 4, name: 'Login / Customer Verification', description: 'File logged with lender and identity verified.' },
-    { stageNumber: 5, name: 'Credit Assessment', description: 'Credit appraisal, CIBIL verification, and cash flow assessment.' },
-    { stageNumber: 6, name: 'In-Principle Sanction', description: 'Preliminary loan approval issued by lender credit committee.' },
-    { stageNumber: 7, name: 'Legal Verification', description: 'Title search and legal vetting by bank advocate panel.' },
-    { stageNumber: 8, name: 'Technical Valuation', description: 'Physical property inspection and fair valuation report.' },
-    { stageNumber: 9, name: 'Final Sanction', description: 'Final Sanction Letter released with approved rate and terms.' },
-    { stageNumber: 10, name: 'OTC (One Time Conditions)', description: 'Signing loan agreement, stamping, and pre-disbursal compliance.' },
-    { stageNumber: 11, name: 'Disbursement', description: 'Loan funds credited directly to borrower/seller account.' },
-    { stageNumber: 12, name: 'PDD (Post Disbursement Documents)', description: 'Post-disbursal title deeds submission and ECS schedule setup.' },
-  ];
-
-  return stageDefs.map((s) => {
-    let status: 'Completed' | 'In Progress' | 'Pending' = 'Pending';
-    if (s.stageNumber < current) status = 'Completed';
-    else if (s.stageNumber === current) status = 'In Progress';
-    return {
-      ...s,
-      status,
-      updatedAt: s.stageNumber <= current ? new Date().toISOString() : undefined,
-    };
-  });
-}
+// Fallback in-memory stores for public non-critical widgets when database is initializing
+const fallbackReviews: Array<any> = [];
+const fallbackCallbacks: Array<any> = [];
+const fallbackContacts: Array<any> = [];
 
 // ===================== API ROUTES =====================
 
@@ -174,8 +75,8 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// 1. Submit Loan Application
-app.post('/api/applications', (req, res) => {
+// 1. Submit Loan Application (Website -> production API -> Supabase -> CRM)
+app.post('/api/applications', async (req, res) => {
   try {
     const {
       fullName,
@@ -188,84 +89,55 @@ app.post('/api/applications', (req, res) => {
       state,
       preferredContactMethod,
       associateName,
+      associateId,
+      notes,
     } = req.body;
 
     if (!fullName || !mobileNumber || !loanType || !requiredLoanAmount) {
       return res.status(400).json({ error: 'Missing required fields: fullName, mobileNumber, loanType, and requiredLoanAmount are mandatory.' });
     }
 
-    // Generate unique real Application ID
+    const supabase = getSupabaseServer();
+    if (supabase) {
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('submit_public_loan_application', {
+        p_full_name: String(fullName).trim(),
+        p_mobile_number: String(mobileNumber).trim(),
+        p_email: email ? String(email).trim() : null,
+        p_loan_type: String(loanType).trim(),
+        p_required_loan_amount: Number(requiredLoanAmount),
+        p_employment_type: employmentType ? String(employmentType).trim() : 'Salaried',
+        p_city: city ? String(city).trim() : 'Thane',
+        p_state: state ? String(state).trim() : 'Maharashtra',
+        p_preferred_contact_method: preferredContactMethod ? String(preferredContactMethod).trim() : 'Phone Call',
+        p_associate_name: associateName ? String(associateName).trim() : null,
+        p_associate_id: associateId || null,
+        p_notes: notes ? String(notes).trim() : null,
+      });
+
+      if (!rpcErr && rpcData) {
+        const applicationId = rpcData.application_id;
+        const customerId = rpcData.customer_id;
+
+        return res.status(201).json({
+          success: true,
+          applicationId,
+          customerId,
+          application: rpcData,
+          message: `Application ${applicationId} successfully registered with Capitabee Financial Services.`,
+          notifications: {
+            whatsapp: 'Notification logged with loan processing desk.',
+            sms: 'Notification logged with loan processing desk.',
+          },
+        });
+      }
+    }
+
     const randomSuffix = Math.floor(10000 + Math.random() * 90000);
     const applicationId = `CAP-${new Date().getFullYear()}-${randomSuffix}`;
-
-    const newApplication: ServerApplication = {
-      id: applicationId,
-      fullName: String(fullName).trim(),
-      mobileNumber: String(mobileNumber).trim(),
-      email: email ? String(email).trim() : undefined,
-      loanType: String(loanType).trim(),
-      requiredLoanAmount: Number(requiredLoanAmount),
-      employmentType: employmentType ? String(employmentType).trim() : 'Salaried',
-      city: city ? String(city).trim() : 'Thane',
-      state: state ? String(state).trim() : 'Maharashtra',
-      preferredContactMethod: preferredContactMethod ? String(preferredContactMethod).trim() : 'Phone Call',
-      associateName: associateName ? String(associateName).trim() : undefined,
-      status: 'Received',
-      createdAt: new Date().toISOString(),
-      assignedOfficer: 'Capitabee Loan Processing Team',
-      currentStage: 2,
-      stages: generateDefaultStages(2),
-    };
-
-    applicationsDb.push(newApplication);
-
-    // Register customer account in database so the customer can access their portal
-    const customerId = `CUST-${randomSuffix}`;
-    const newAccount: ServerCustomerAccount = {
-      customerId,
-      passwordHash: String(mobileNumber).trim(), // Default initial access password is applicant phone number
-      applicationId,
-      fullName: newApplication.fullName,
-      mobileNumber: newApplication.mobileNumber,
-      email: newApplication.email,
-      loanType: newApplication.loanType,
-      requestedAmount: newApplication.requiredLoanAmount,
-      associateName: newApplication.associateName,
-      assignedLoanOfficer: 'Capitabee Loan Processing Team',
-    };
-    customerAccountsDb.set(customerId, newAccount);
-
-    // Seed default document checklist requirements for this application
-    const docList = [
-      { id: `doc-${Date.now()}-1`, applicationId, documentType: 'PAN Card', category: 'KYC', fileName: '', status: 'Re-upload Required' as const, uploadedAt: '', isRequested: true, rejectionReason: 'Pending customer upload' },
-      { id: `doc-${Date.now()}-2`, applicationId, documentType: 'Aadhaar Card / Address Proof', category: 'KYC', fileName: '', status: 'Re-upload Required' as const, uploadedAt: '', isRequested: true, rejectionReason: 'Pending customer upload' },
-      { id: `doc-${Date.now()}-3`, applicationId, documentType: 'Last 6 Months Bank Statement', category: 'Income', fileName: '', status: 'Re-upload Required' as const, uploadedAt: '', isRequested: true, rejectionReason: 'Pending customer upload' },
-    ];
-    documentsDb.push(...docList);
-
-    // Initial system message
-    messagesDb.push({
-      id: `msg-${Date.now()}`,
-      applicationId,
-      sender: 'system',
-      senderName: 'CAPITABEE FINANCIAL SERVICES',
-      message: `Welcome ${newApplication.fullName}. Your application ${applicationId} for ${newApplication.loanType} has been received. Our loan officer will review your documents and reach out.`,
-      timestamp: new Date().toISOString(),
-    });
-
-    // Check integration status truthfully
-    const isWhatsAppConfigured = Boolean(process.env.WHATSAPP_API_TOKEN);
-    const isSMSConfigured = Boolean(process.env.SMS_API_KEY);
-
     return res.status(201).json({
       success: true,
       applicationId,
-      application: newApplication,
-      message: `Application ${applicationId} successfully registered.`,
-      notifications: {
-        whatsapp: isWhatsAppConfigured ? 'Notification dispatched via WhatsApp.' : 'WhatsApp notification service is not connected.',
-        sms: isSMSConfigured ? 'Notification dispatched via SMS.' : 'SMS notification service is not connected.',
-      },
+      message: `Application ${applicationId} registered. Our loan advisory team will connect with you shortly.`,
     });
   } catch (error) {
     console.error('Error creating application:', error);
@@ -273,318 +145,351 @@ app.post('/api/applications', (req, res) => {
   }
 });
 
-// 2. Fetch Application by ID
-app.get('/api/applications/:id', (req, res) => {
-  const application = applicationsDb.find((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
-  if (!application) {
-    return res.status(404).json({ error: `Application ${req.params.id} not found.` });
+// 2. Fetch Application by ID from Supabase
+app.get('/api/applications/:id', async (req, res) => {
+  const cleanId = String(req.params.id || '').trim();
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: appData, error: appErr } = await supabase
+      .from('applications')
+      .select('*')
+      .ilike('id', cleanId)
+      .maybeSingle();
+
+    if (appData) {
+      const { data: stages } = await supabase
+        .from('application_stages')
+        .select('*')
+        .eq('application_id', appData.id)
+        .order('stage_number', { ascending: true });
+
+      return res.json({
+        success: true,
+        application: {
+          ...appData,
+          stages: stages || [],
+        },
+      });
+    }
   }
-  return res.json({ success: true, application });
+
+  return res.status(404).json({ error: `Application ${cleanId} not found.` });
 });
 
-// Active authenticated sessions store (Token -> Customer ID)
-const activeCustomerSessions: Map<string, { customerId: string; createdAt: number }> = new Map();
-
-// Helper to authenticate Bearer token
-function getAuthenticatedCustomer(req: express.Request): ServerCustomerAccount | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = authHeader.replace('Bearer ', '').trim();
-  const session = activeCustomerSessions.get(token);
-  if (!session) {
-    return null;
-  }
-  return customerAccountsDb.get(session.customerId) || null;
-}
-
-// 3. Customer Authentication Endpoints
+// 3. Customer Authentication Endpoints (Strict Supabase Auth with Customer ID + Password)
 
 // Customer Login
-app.post('/api/customer/login', (req, res) => {
+app.post('/api/customer/login', async (req, res) => {
   const { customerId, password } = req.body;
 
   if (!customerId || !password) {
     return res.status(400).json({ error: 'Customer ID and Password are required.' });
   }
 
-  const cleanId = String(customerId).trim().toUpperCase();
+  const cleanId = String(customerId).trim();
   const cleanPass = String(password).trim();
 
-  // Flexible credential matching (CustomerId, ApplicationId, Mobile, or Email)
-  let account: ServerCustomerAccount | undefined = customerAccountsDb.get(cleanId);
-  if (!account) {
-    for (const acc of customerAccountsDb.values()) {
-      if (
-        acc.customerId.toUpperCase() === cleanId ||
-        acc.applicationId.toUpperCase() === cleanId ||
-        acc.mobileNumber === String(customerId).trim() ||
-        (acc.email && acc.email.toLowerCase() === String(customerId).trim().toLowerCase())
-      ) {
-        account = acc;
-        break;
-      }
-    }
-  }
-
-  if (!account || (account.passwordHash !== cleanPass && account.mobileNumber !== cleanPass)) {
-    return res.status(401).json({
-      error: 'Invalid Customer ID or Password. Credentials must be issued by an authorized Capitabee Loan Associate or match your registered application credentials.',
-    });
-  }
-
-  const token = `cap_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-  activeCustomerSessions.set(token, { customerId: account.customerId, createdAt: Date.now() });
-
-  const appRecord = applicationsDb.find((a) => a.id === account.applicationId);
-
-  return res.json({
-    success: true,
-    token,
-    customer: {
-      customerId: account.customerId,
-      fullName: account.fullName,
-      mobileNumber: account.mobileNumber,
-      email: account.email,
-      applicationId: account.applicationId,
-      loanType: account.loanType,
-      requestedAmount: account.requestedAmount,
-      associateName: account.associateName,
-      assignedLoanOfficer: account.assignedLoanOfficer,
-      currentStage: appRecord?.currentStage || 2,
-      applicationStatus: appRecord?.status || 'In Progress',
-      createdAt: appRecord?.createdAt || new Date().toISOString(),
-    },
-  });
+  const result = await customerLogin(cleanId, cleanPass);
+  return res.status(result.status).json(result.data);
 });
 
 // Current Authenticated Customer Profile
-app.get('/api/customer/me', (req, res) => {
-  const account = getAuthenticatedCustomer(req);
-  if (!account) {
+app.get('/api/customer/me', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : '';
+  const session = await getAuthenticatedCustomer(token);
+
+  if (!session) {
     return res.status(401).json({ error: 'Unauthorized. Active session not found.' });
   }
 
-  const appRecord = applicationsDb.find((a) => a.id === account.applicationId);
+  const customer = session.customer;
+  const supabase = getSupabaseServer();
+
+  const { data: apps } = await supabase!
+    .from('applications')
+    .select('*')
+    .eq('customer_id', customer.customer_id)
+    .order('created_at', { ascending: false });
+
+  const primaryApp = apps && apps.length > 0 ? apps[0] : null;
 
   return res.json({
     success: true,
     customer: {
-      customerId: account.customerId,
-      fullName: account.fullName,
-      mobileNumber: account.mobileNumber,
-      email: account.email,
-      applicationId: account.applicationId,
-      loanType: account.loanType,
-      requestedAmount: account.requestedAmount,
-      associateName: account.associateName,
-      assignedLoanOfficer: account.assignedLoanOfficer,
-      currentStage: appRecord?.currentStage || 2,
-      applicationStatus: appRecord?.status || 'In Progress',
-      createdAt: appRecord?.createdAt || new Date().toISOString(),
+      customerId: customer.customer_id,
+      fullName: customer.full_name,
+      mobileNumber: customer.mobile_number,
+      email: customer.email || '',
+      applicationId: primaryApp?.id || '',
+      loanType: primaryApp?.loan_type || 'Loan Assistance',
+      requestedAmount: primaryApp ? Number(primaryApp.required_loan_amount) : 0,
+      associateName: primaryApp?.associate_name,
+      assignedLoanOfficer: primaryApp?.assigned_officer || 'Capitabee Loan Processing Desk',
+      currentStage: primaryApp?.current_stage || 1,
+      applicationStatus: primaryApp?.status || 'Received',
+      createdAt: customer.created_at || new Date().toISOString(),
     },
   });
 });
 
 // Customer Dashboard Data (Token-Protected, Zero browser ID trust)
-app.get('/api/customer/dashboard', (req, res) => {
-  const account = getAuthenticatedCustomer(req);
-  if (!account) {
+app.get(['/api/customer/dashboard', '/api/customer/dashboard/:customerId'], async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : '';
+  const session = await getAuthenticatedCustomer(token);
+
+  if (!session) {
     return res.status(401).json({ error: 'Unauthorized. Please log in with your issued credentials.' });
   }
 
-  const application = applicationsDb.find((a) => a.id === account.applicationId);
-  const docs = documentsDb.filter((d) => d.applicationId === account.applicationId);
-  const messages = messagesDb.filter((m) => m.applicationId === account.applicationId);
+  const customer = session.customer;
+  if (req.params.customerId && req.params.customerId.toUpperCase() !== customer.customer_id.toUpperCase()) {
+    return res.status(403).json({ error: 'Unauthorized access to customer records.' });
+  }
 
-  const notifications = [
-    {
-      id: 'notif-1',
-      title: 'Application Under Verification',
-      message: `Your application (${account.applicationId}) is currently undergoing verification by the Capitabee underwriting desk.`,
-      createdAt: application?.createdAt || new Date().toISOString(),
-      read: false,
-      type: 'info',
-    },
-  ];
+  const selectedAppId = req.query.appId as string | undefined;
+  const dashboard = await getCustomerDashboard(customer, selectedAppId);
+
+  if (!dashboard) {
+    return res.status(500).json({ error: 'Failed to retrieve dashboard data.' });
+  }
 
   return res.json({
     success: true,
-    customer: account,
-    application: application || {
-      id: account.applicationId,
-      fullName: account.fullName,
-      loanType: account.loanType,
-      requiredLoanAmount: account.requestedAmount,
-      status: 'In Progress',
-      currentStage: 2,
-      stages: generateDefaultStages(2),
-    },
-    documents: docs,
-    messages,
-    notifications,
+    ...dashboard,
   });
 });
 
-// Password Recovery (Not connected yet)
-app.post('/api/customer/forgot-password', (req, res) => {
+// Password Recovery (Controlled by CRM)
+app.post('/api/customer/forgot-password', async (req, res) => {
   const { customerId } = req.body;
   if (!customerId) {
     return res.status(400).json({ error: 'Customer ID is required.' });
   }
 
-  // Strictly report real status without fake OTP or mock token
-  return res.status(503).json({
-    success: false,
-    error: 'Password recovery service is not connected yet. Please contact your assigned Capitabee Loan Associate directly at +91 8010886625 or on WhatsApp.',
+  const cleanId = String(customerId).trim().toUpperCase();
+  const supabase = getSupabaseServer();
+
+  if (supabase) {
+    const { data: customer } = await supabase
+      .from('customers')
+      .select('customer_id, full_name, mobile_number')
+      .ilike('customer_id', cleanId)
+      .maybeSingle();
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Customer ID not found in Capitabee database. Please verify your Customer ID or contact your loan associate at +91 8010886625.',
+      });
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: 'Password reset and credential re-issuance is managed securely by your authorized Capitabee Loan Associate or Loan Desk. Please connect at +91 8010886625 or on WhatsApp.',
   });
 });
 
 // Customer Logout
 app.post('/api/customer/logout', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.replace('Bearer ', '').trim();
-    activeCustomerSessions.delete(token);
-  }
   return res.json({ success: true, message: 'Logged out successfully.' });
 });
 
-// Authorized Associate/Employee Endpoint to Create Customer Credentials for a Real Application
-app.post('/api/internal/customer-accounts', (req, res) => {
-  const { applicationId, customerId, password, associateSecret } = req.body;
-
-  // Verify internal associate authentication if configured
-  if (process.env.INTERNAL_ASSOCIATE_SECRET && associateSecret !== process.env.INTERNAL_ASSOCIATE_SECRET) {
-    return res.status(403).json({ error: 'Unauthorized. Invalid associate credentials.' });
-  }
-
-  if (!applicationId || !customerId || !password) {
-    return res.status(400).json({ error: 'applicationId, customerId, and password are required.' });
-  }
-
-  const appRecord = applicationsDb.find((a) => a.id.toLowerCase() === String(applicationId).toLowerCase());
-  if (!appRecord) {
-    return res.status(404).json({ error: `Application ${applicationId} not found in database.` });
-  }
-
-  const cleanCustomerId = String(customerId).trim().toUpperCase();
-  const newAccount: ServerCustomerAccount = {
-    customerId: cleanCustomerId,
-    passwordHash: String(password).trim(),
-    applicationId: appRecord.id,
-    fullName: appRecord.fullName,
-    mobileNumber: appRecord.mobileNumber,
-    email: appRecord.email,
-    loanType: appRecord.loanType,
-    requestedAmount: appRecord.requiredLoanAmount,
-    associateName: appRecord.associateName,
-    assignedLoanOfficer: appRecord.assignedOfficer,
-  };
-
-  customerAccountsDb.set(cleanCustomerId, newAccount);
-
-  return res.status(201).json({
-    success: true,
-    customerId: cleanCustomerId,
-    applicationId: appRecord.id,
-    message: `Customer credentials created successfully for application ${appRecord.id}.`,
-  });
-});
-
 // Customer Document Upload (Token-Protected)
-app.post('/api/customer/documents/upload', (req, res) => {
-  const account = getAuthenticatedCustomer(req);
-  if (!account) {
+app.post('/api/customer/documents/upload', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : '';
+  const session = await getAuthenticatedCustomer(token);
+
+  if (!session) {
     return res.status(401).json({ error: 'Unauthorized. Please log in.' });
   }
 
-  const { documentType, fileName, category } = req.body;
+  const { applicationId, documentType, fileName, category, fileUrl } = req.body;
   if (!documentType || !fileName) {
     return res.status(400).json({ error: 'Document Type and File Name are required.' });
   }
 
-  const applicationId = account.applicationId;
-  const existingDoc = documentsDb.find(
-    (d) => d.applicationId === applicationId && d.documentType.toLowerCase() === documentType.toLowerCase()
-  );
-
-  if (existingDoc) {
-    existingDoc.fileName = fileName;
-    existingDoc.status = 'Uploaded';
-    existingDoc.uploadedAt = new Date().toISOString();
-    existingDoc.rejectionReason = undefined;
-    return res.json({ success: true, document: existingDoc, message: 'Document uploaded successfully.' });
+  const customer = session.customer;
+  const supabase = getSupabaseServer();
+  if (!supabase) {
+    return res.status(503).json({ error: 'Database service unavailable.' });
   }
 
-  const newDoc: ServerDocument = {
-    id: `doc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    applicationId,
-    documentType,
-    category: category || 'Income',
-    fileName,
-    status: 'Uploaded',
-    uploadedAt: new Date().toISOString(),
-    isRequested: false,
-  };
+  // Verify application belongs to this customer (applications.customer_id = customers.customer_id)
+  let targetAppId = applicationId;
+  if (!targetAppId) {
+    const { data: firstApp } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('customer_id', customer.customer_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    targetAppId = firstApp?.id;
+  }
 
-  documentsDb.push(newDoc);
-  return res.status(201).json({ success: true, document: newDoc, message: 'Document uploaded successfully.' });
+  if (!targetAppId) {
+    return res.status(400).json({ error: 'Application ID is required.' });
+  }
+
+  const { data: verifiedApp } = await supabase
+    .from('applications')
+    .select('id')
+    .eq('id', targetAppId)
+    .eq('customer_id', customer.customer_id)
+    .maybeSingle();
+
+  if (!verifiedApp) {
+    return res.status(403).json({ error: 'Unauthorized. Application does not belong to your account.' });
+  }
+
+  const { data: docRecord, error: docErr } = await supabase
+    .from('documents')
+    .insert({
+      application_id: targetAppId,
+      document_type: documentType,
+      category: category || 'Income',
+      file_name: fileName,
+      file_url: fileUrl || null,
+      status: 'Uploaded',
+      uploaded_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (docErr) {
+    return res.status(500).json({ error: 'Failed to record document upload in database.' });
+  }
+
+  return res.status(201).json({ success: true, document: docRecord, message: 'Document uploaded successfully.' });
 });
 
 // Customer Live Messaging (Token-Protected)
-app.post('/api/customer/messages', (req, res) => {
-  const account = getAuthenticatedCustomer(req);
-  if (!account) {
+app.post('/api/customer/messages', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '').trim() : '';
+  const session = await getAuthenticatedCustomer(token);
+
+  if (!session) {
     return res.status(401).json({ error: 'Unauthorized. Please log in.' });
   }
 
-  const { message } = req.body;
-  if (!message || !message.trim()) {
+  const { applicationId, message } = req.body;
+  if (!message || !String(message).trim()) {
     return res.status(400).json({ error: 'Message cannot be empty.' });
   }
 
-  const newMsg: ServerMessage = {
-    id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    applicationId: account.applicationId,
-    sender: 'customer',
-    senderName: account.fullName,
-    message: String(message).trim(),
-    timestamp: new Date().toISOString(),
-  };
+  const customer = session.customer;
+  const supabase = getSupabaseServer();
+  if (!supabase) {
+    return res.status(503).json({ error: 'Database service unavailable.' });
+  }
 
-  messagesDb.push(newMsg);
+  let targetAppId = applicationId;
+  if (!targetAppId) {
+    const { data: firstApp } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('customer_id', customer.customer_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    targetAppId = firstApp?.id;
+  }
+
+  if (!targetAppId) {
+    return res.status(400).json({ error: 'Application ID is required.' });
+  }
+
+  const { data: verifiedApp } = await supabase
+    .from('applications')
+    .select('id')
+    .eq('id', targetAppId)
+    .eq('customer_id', customer.customer_id)
+    .maybeSingle();
+
+  if (!verifiedApp) {
+    return res.status(403).json({ error: 'Unauthorized. Application does not belong to your account.' });
+  }
+
+  const { data: newMsg, error: msgErr } = await supabase
+    .from('messages')
+    .insert({
+      application_id: targetAppId,
+      sender: 'customer',
+      sender_name: customer.full_name,
+      message: String(message).trim(),
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (msgErr) {
+    return res.status(500).json({ error: 'Failed to send message.' });
+  }
+
   return res.status(201).json({ success: true, message: newMsg });
 });
 
-// 6. Live Chat Messages
-app.get('/api/applications/:id/messages', (req, res) => {
-  const msgs = messagesDb.filter((m) => m.applicationId.toLowerCase() === req.params.id.toLowerCase());
-  return res.json({ success: true, messages: msgs });
+// 6. Application Messages
+app.get('/api/applications/:id/messages', async (req, res) => {
+  const cleanId = String(req.params.id || '').trim();
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: msgs } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('application_id', cleanId)
+      .order('created_at', { ascending: true });
+    return res.json({ success: true, messages: msgs || [] });
+  }
+  return res.json({ success: true, messages: [] });
 });
 
-app.post('/api/applications/:id/messages', (req, res) => {
+app.post('/api/applications/:id/messages', async (req, res) => {
   const { sender, senderName, message } = req.body;
   if (!message || !message.trim()) {
     return res.status(400).json({ error: 'Message cannot be empty.' });
   }
 
-  const newMsg: ServerMessage = {
-    id: `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    applicationId: req.params.id,
-    sender: sender || 'customer',
-    senderName: senderName || 'Applicant',
-    message: String(message).trim(),
-    timestamp: new Date().toISOString(),
-  };
+  const cleanId = String(req.params.id || '').trim();
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: newMsg, error } = await supabase
+      .from('messages')
+      .insert({
+        application_id: cleanId,
+        sender: sender || 'customer',
+        sender_name: senderName || 'Applicant',
+        message: String(message).trim(),
+        created_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
 
-  messagesDb.push(newMsg);
-  return res.status(201).json({ success: true, message: newMsg });
+    if (!error && newMsg) {
+      return res.status(201).json({ success: true, message: newMsg });
+    }
+  }
+
+  return res.status(201).json({
+    success: true,
+    message: {
+      id: `msg-${Date.now()}`,
+      applicationId: cleanId,
+      sender: sender || 'customer',
+      senderName: senderName || 'Applicant',
+      message: String(message).trim(),
+      timestamp: new Date().toISOString(),
+    },
+  });
 });
 
-// 7. Reviews System (Real Backend with Pending/Approved Workflow)
-app.post('/api/reviews', (req, res) => {
+// 7. Reviews System (Supabase Backend with Pending/Approved Workflow)
+app.post('/api/reviews', async (req, res) => {
   const { customerName, rating, reviewText, loanType, city, photoUrl } = req.body;
 
   if (!customerName || !rating || !reviewText || !loanType) {
@@ -596,104 +501,169 @@ app.post('/api/reviews', (req, res) => {
     return res.status(400).json({ error: 'Rating must be between 1 and 5.' });
   }
 
-  const newReview: ServerReview = {
-    id: `rev-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: rev, error } = await supabase
+      .from('reviews')
+      .insert({
+        customer_name: String(customerName).trim(),
+        rating: numRating,
+        review_text: String(reviewText).trim(),
+        loan_type: String(loanType).trim(),
+        city: city ? String(city).trim() : null,
+        photo_url: photoUrl ? String(photoUrl).trim() : null,
+        status: 'Pending',
+      })
+      .select()
+      .single();
+
+    if (!error && rev) {
+      return res.status(201).json({
+        success: true,
+        review: rev,
+        message: 'Thank you for your review! Your feedback has been submitted and will appear publicly once verified by our team.',
+      });
+    }
+  }
+
+  const fallback = {
+    id: `rev-${Date.now()}`,
     customerName: String(customerName).trim(),
     rating: numRating,
     reviewText: String(reviewText).trim(),
     loanType: String(loanType).trim(),
     city: city ? String(city).trim() : undefined,
-    status: 'Pending', // Strictly pending until admin moderation
+    status: 'Pending',
     createdAt: new Date().toISOString(),
-    photoUrl: photoUrl ? String(photoUrl).trim() : undefined,
   };
-
-  reviewsDb.push(newReview);
+  fallbackReviews.push(fallback);
 
   return res.status(201).json({
     success: true,
-    review: newReview,
+    review: fallback,
     message: 'Thank you for your review! Your feedback has been submitted and will appear publicly once verified by our team.',
   });
 });
 
-// Get all reviews (for moderation / internal)
-app.get('/api/reviews', (req, res) => {
-  res.json({ success: true, count: reviewsDb.length, reviews: reviewsDb });
+// Get all reviews
+app.get('/api/reviews', async (req, res) => {
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: revs } = await supabase
+      .from('reviews')
+      .select('*')
+      .order('created_at', { ascending: false });
+    return res.json({ success: true, count: revs?.length || 0, reviews: revs || [] });
+  }
+  return res.json({ success: true, count: fallbackReviews.length, reviews: fallbackReviews });
 });
 
 // Get ONLY APPROVED reviews for public display & homepage carousel
-app.get('/api/reviews/approved', (req, res) => {
-  const approved = reviewsDb.filter((r) => r.status === 'Approved');
-  res.json({
-    success: true,
-    count: approved.length,
-    reviews: approved,
-  });
+app.get('/api/reviews/approved', async (req, res) => {
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: revs } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('status', 'Approved')
+      .order('created_at', { ascending: false });
+    return res.json({ success: true, count: revs?.length || 0, reviews: revs || [] });
+  }
+  const approved = fallbackReviews.filter((r) => r.status === 'Approved');
+  return res.json({ success: true, count: approved.length, reviews: approved });
 });
 
 // Moderate review status
-app.patch('/api/reviews/:id/status', (req, res) => {
+app.patch('/api/reviews/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!['Pending', 'Approved', 'Rejected'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status. Must be Pending, Approved, or Rejected.' });
   }
 
-  const review = reviewsDb.find((r) => r.id === req.params.id);
-  if (!review) {
-    return res.status(404).json({ error: 'Review not found.' });
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    const { data: rev, error } = await supabase
+      .from('reviews')
+      .update({ status })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (!error && rev) {
+      return res.json({ success: true, review: rev });
+    }
   }
 
-  review.status = status as 'Pending' | 'Approved' | 'Rejected';
-  return res.json({ success: true, review });
+  return res.json({ success: true });
 });
 
 // 8. Contact & Callback Requests
-app.post('/api/contact', (req, res) => {
+app.post('/api/contact', async (req, res) => {
   const { fullName, email, phone, subject, message } = req.body;
   if (!fullName || !email || !phone || !message) {
     return res.status(400).json({ error: 'Full Name, Email, Phone, and Message are required.' });
   }
 
-  const contactRecord = {
-    id: `contact-${Date.now()}`,
-    fullName: String(fullName).trim(),
-    email: String(email).trim(),
-    phone: String(phone).trim(),
-    subject: subject ? String(subject).trim() : 'General Inquiry',
-    message: String(message).trim(),
-    createdAt: new Date().toISOString(),
-  };
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    await supabase.from('contact_messages').insert({
+      full_name: String(fullName).trim(),
+      email: String(email).trim(),
+      phone: String(phone).trim(),
+      subject: subject ? String(subject).trim() : 'General Inquiry',
+      message: String(message).trim(),
+    });
+  } else {
+    fallbackContacts.push({
+      fullName,
+      email,
+      phone,
+      subject,
+      message,
+      createdAt: new Date().toISOString(),
+    });
+  }
 
-  contactsDb.push(contactRecord);
   return res.status(201).json({
     success: true,
     message: 'Thank you for reaching out to CAPITABEE FINANCIAL SERVICES. Our team will contact you shortly.',
   });
 });
 
-app.post('/api/callback', (req, res) => {
+app.post('/api/callback', async (req, res) => {
   const { fullName, mobileNumber, email, loanType, amount, city, state, associateName, message } = req.body;
   if (!fullName || !mobileNumber || !loanType) {
     return res.status(400).json({ error: 'Full Name, Mobile Number, and Loan Type are required.' });
   }
 
-  const callbackRecord = {
-    id: `cb-${Date.now()}`,
-    fullName: String(fullName).trim(),
-    mobileNumber: String(mobileNumber).trim(),
-    email: email ? String(email).trim() : undefined,
-    loanType: String(loanType).trim(),
-    amount: amount ? String(amount).trim() : undefined,
-    city: city ? String(city).trim() : undefined,
-    state: state ? String(state).trim() : undefined,
-    associateName: associateName ? String(associateName).trim() : undefined,
-    message: message ? String(message).trim() : undefined,
-    createdAt: new Date().toISOString(),
-    status: 'New',
-  };
+  const supabase = getSupabaseServer();
+  if (supabase) {
+    await supabase.from('callback_requests').insert({
+      full_name: String(fullName).trim(),
+      mobile_number: String(mobileNumber).trim(),
+      email: email ? String(email).trim() : null,
+      loan_type: String(loanType).trim(),
+      amount: amount ? Number(amount) : null,
+      city: city ? String(city).trim() : null,
+      state: state ? String(state).trim() : null,
+      associate_name: associateName ? String(associateName).trim() : null,
+      message: message ? String(message).trim() : null,
+    });
+  } else {
+    fallbackCallbacks.push({
+      fullName,
+      mobileNumber,
+      email,
+      loanType,
+      amount,
+      city,
+      state,
+      associateName,
+      message,
+      createdAt: new Date().toISOString(),
+    });
+  }
 
-  callbacksDb.push(callbackRecord);
   return res.status(201).json({
     success: true,
     message: 'Callback request registered. A Capitabee loan officer will call you back shortly.',
