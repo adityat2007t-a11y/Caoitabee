@@ -12,3 +12,4 @@ Disallow: /api/
 
 # Sitemap location
 Sitemap: https://capitabee.com/sitemap.xml
+Sitemap: https://www.capitabee.com/sitemap.xml
