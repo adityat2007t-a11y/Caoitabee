@@ -20,6 +20,7 @@ import { LoginPage } from './pages/LoginPage';
 import { CustomerDashboardPage } from './pages/CustomerDashboardPage';
 import { LegalPage } from './pages/LegalPage';
 import { EMICalculatorSection } from './components/EMICalculatorSection';
+import { SEOHead } from './components/SEOHead';
 
 export function App() {
   const [currentPath, setCurrentPath] = useState<string>(
@@ -186,6 +187,9 @@ export function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FDFCF8] text-[#2D332E] antialiased">
+      {/* Dynamic SEO & OpenGraph Management */}
+      <SEOHead currentPath={currentPath} />
+
       {/* 1. STICKY HEADER */}
       <Header
         currentPath={currentPath}

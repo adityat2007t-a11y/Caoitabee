@@ -1,0 +1,14 @@
+# Robots.txt for Capitabee Financial Services
+# Website: https://capitabee.com
+
+User-agent: *
+Allow: /
+
+# Exclude private customer portals and API endpoints from indexing
+Disallow: /customer/
+Disallow: /dashboard
+Disallow: /login
+Disallow: /api/
+
+# Sitemap location
+Sitemap: https://capitabee.com/sitemap.xml

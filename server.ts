@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
@@ -766,6 +767,33 @@ STRICT BOUNDARIES:
       error: 'AI Advisor service is temporarily busy. Please connect with our loan officer directly at +91 8010886625 or on WhatsApp.',
     });
   }
+});
+
+// 10. Dedicated SEO & Search Engine Indexing Endpoints
+app.get('/sitemap.xml', (req, res) => {
+  const sitemapDist = path.join(process.cwd(), 'dist', 'sitemap.xml');
+  const sitemapPublic = path.join(process.cwd(), 'public', 'sitemap.xml');
+  const fileToServe = fs.existsSync(sitemapDist) ? sitemapDist : sitemapPublic;
+
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
+  if (fs.existsSync(fileToServe)) {
+    return res.sendFile(fileToServe);
+  }
+  return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://capitabee.com/</loc></url></urlset>');
+});
+
+app.get('/robots.txt', (req, res) => {
+  const robotsDist = path.join(process.cwd(), 'dist', 'robots.txt');
+  const robotsPublic = path.join(process.cwd(), 'public', 'robots.txt');
+  const fileToServe = fs.existsSync(robotsDist) ? robotsDist : robotsPublic;
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
+  if (fs.existsSync(fileToServe)) {
+    return res.sendFile(fileToServe);
+  }
+  return res.status(200).send('User-agent: *\nAllow: /\n\nSitemap: https://capitabee.com/sitemap.xml\n');
 });
 
 // Static asset serving for images and public files
