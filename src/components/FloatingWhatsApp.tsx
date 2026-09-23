@@ -8,11 +8,11 @@ export const FloatingWhatsApp: React.FC = () => {
       href={BRAND_CONFIG.contact.whatsappUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-[#5D6D5F] text-white shadow-xl hover:bg-[#4E5C50] hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center border-2 border-[#FDFCF8] group"
+      className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-[#5D6D5F] text-white shadow-xl hover:bg-[#4E5C50] hover:scale-110 hover:animate-pulse active:scale-95 transition-all duration-300 flex items-center justify-center border-2 border-[#FDFCF8] group"
       aria-label="Chat on WhatsApp with Capitabee Financial Services loan officer"
       id="floating-whatsapp-button"
     >
-      <MessageCircle className="w-7 h-7" />
+      <MessageCircle className="w-7 h-7 group-hover:scale-110 group-hover:animate-bounce transition-transform" />
       <span className="sr-only">Chat on WhatsApp with Capitabee Financial Services</span>
 
       {/* Tooltip on desktop hover */}
